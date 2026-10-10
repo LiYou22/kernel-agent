@@ -8,10 +8,13 @@ from kagent import harness
 from kagent.levels import LEVELS
 import kernelbench as kb
 
-ADAPT = {  # kernelbench signature -> ours
+# Before v4 our L4/L8 kernels took a gain (and bias); kernelbench's take only x. Adapt only
+# when the checked-out harness still uses the old signature.
+_OLD = {
     4: lambda k: (lambda x: k(x, np.ones(x.shape[1], np.float32), 1e-6)),
     8: lambda k: (lambda x: k(x, np.ones(x.shape[1], np.float32), np.zeros(x.shape[1], np.float32), 1e-5)),
 }
+ADAPT = {n: f for n, f in _OLD.items() if ", g," in LEVELS[n].signature}
 extra = sys.argv[3:]
 files = sorted(glob.glob(f"{REPO}/kernels/*/l*.py")) + extra
 rows = []
