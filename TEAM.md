@@ -24,23 +24,24 @@ both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-c
 
 | seat | slice to run now | command |
 |---|---|---|
-| **133** | **`ours` v3 on L8–10** (5 runs, 12 attempts) | see below |
+| **134 (Erfu)** | **`ours` v3 on L8–10** (5 runs, 12 attempts) | see below |
 | 132 | (optional) `naive` L5–7 on v2: low value, ours is 0/5 there | `scripts/launch.sh naive 5 6 7` on `main` |
 
-**seat-133, v3 on L8–10** (from a clean checkout of this repo):
+**seat-134 (Erfu), v3 on L8–10** (from a clean checkout of this repo; if your seat is not 134, change `POD`;
+if the pod is still running upstream-nki experiments, both will slow down, since one model server serves both):
 
 ```bash
 git fetch origin && git switch v3 && git pull
-export POD=seat-133
+export POD=seat-134
 scripts/sync.sh
 kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 62 passed
 scripts/launch.sh ours 8 9 10
-kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-133.log'      # must show veddb241adf
+kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-134.log'      # must show veddb241adf
 git switch main
 ```
 
-When it finishes (about 1.5–2 h): `git switch -c results-seat133-L8910 origin/main`, `scripts/fetch.sh`,
-commit `results/seat-133/ours-L8910-seat-133.*`, open a PR. Seat-130 is running v3 on L4–L6 (5 runs).
+When it finishes (about 1.5–2 h): `git switch -c results-seat134-L8910 origin/main`, `scripts/fetch.sh`,
+commit `results/seat-134/ours-L8910-seat-134.*`, open a PR. Seat-130 is running v3 on L4–L6 (5 runs).
 
 **Deliverables** (from the challenge):
 
