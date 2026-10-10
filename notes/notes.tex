@@ -517,6 +517,25 @@ on the final version \code{93845c17a6}; identical requests are served from the r
 restart costs almost nothing (cached replies are real earlier replies to byte-identical requests,
 marked \code{cached} in the log).
 
+\entry{E12: two compounding bugs, and verified hypotheses at 50\% coverage}{2026-10-10}
+Live L4 (v2, run 1) produced a kernel with \emph{two} bugs: the mean square was computed per column
+tile, and the squares were accumulated in float32 (overflowing on the $\pm10^{18}$ cases). The
+per-tile hypothesis explained 6 of 9 wrong cases and the overflow the other 3; neither reached the
+90\% needed for a common fact, so the agent got \code{numeric:other} three times and stopped. Level
+hypotheses are checked numerically against the reference (the output equals the per-tile
+reference), so they are not coincidences: they now win at $\ge 50\%$ coverage, and the directive
+says ``this explains $k$ of $n$ wrong cases; fix it first''. The live kernel is a regression test
+(\code{kernels/broken/l4\_live\_two\_bugs.py}). Version \code{e22ccab872}; seat-130 restarted on it.
+
+\entry{E13: a directive can induce a rule violation}{2026-10-10}
+Re-run of the same L4 trajectory on \code{e22ccab872}: attempt 5 gets \code{per-tile-stat}, attempt 6
+fixes it and leaves only the overflow (E12 working), attempts 6--7 get the \code{huge-magnitude}
+fix, which offered two remedies: ``accumulate in float64, \emph{or} divide by the row's largest
+magnitude''. The model took the second and computed the maximum with \code{np.max}, a banned call;
+attempt 8 was a rule violation and the level ran out of attempts. Lesson: a directive must offer
+one remedy that cannot itself break a rule. To change after this benchmark round (the harness is
+frozen while the pods run, so all arms share one version).
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
