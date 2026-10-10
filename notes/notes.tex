@@ -877,6 +877,26 @@ Caveats, stated with the result: the sample is small, most of the gain is L6, an
 introduced together, so the gain cannot be attributed to one of them. v4 = v3 + alignment with the
 organizers' checker, and is the final agent.
 
+\entry{E31: the final agent, and the final kernel per level}{2026-10-10}
+v4 alone (\code{174153fd32}, 3 runs each on seat-130): L4 0/3, L7 0/3. A teammate's v3-rewrite (PR \#10)
+then reported L8 0/5 $\to$ 5/5 and L9 0/5 $\to$ 4/5 under our checker, from three live-failure fixes: a
+draft with $\ge 5$ violations gets one instruction to rewrite the body in the op's legal loop shape;
+``stuck'' counts a repeated class only if nothing improved; layernorm normalised down the columns is
+named. The same PR fixed a checker hole found by its red team: a column slice \code{x[a:b, j]} was
+bounded by the 512-column limit instead of the 128-row tile, so one live L9 kernel reading 259 rows
+passed; re-checking all 38 verified kernels, only that one changes. Its L8 kernels use the old
+signature, so all 5 fail the organizers' checker.
+
+\textbf{Final agent} = v4 merged with v3-rewrite (\code{f0c39f1e0f}, 74 tests; L8 skeleton and
+diagnostic adapted to \code{kernel(x, eps=1e-5)}). On L8, 3 runs: stuck, failed, \checkmark\ in 7
+attempts, and that kernel also passes the organizers' checker: \textbf{L8 1/3 on the final version}.
+
+\textbf{Final kernel per level} (\code{FINAL.md}, \code{scripts/final\_kernels.py}): every agent-written
+kernel from every run, kept only if it passes \emph{both} our current harness (rules with the column fix,
+dev and holdout) and the organizers' \code{kernelbench.py}; among those the lowest roofline time.
+Result: L1, L2, L3, L6, L8, L10 pass both (L9 re-check pending). Requiring both checkers mattered: the first selection picked an L9 kernel that the
+organizers' checker accepts but that reads 259 rows in one slice.
+
 %==============================================================================
 \section{v2 and v3, side by side}
 \label{sec:v2v3}

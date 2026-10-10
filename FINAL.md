@@ -14,6 +14,6 @@ softmax of notes E19) are excluded: only kernels the agent wrote count.
 | L5 softmax | — | none passes yet | — | — | — | 0/0 |
 | L6 transpose | `kernels/final/l6_transpose.py` | ours v29fd8d run2 | 32/32 cases | 1.00x | 0 | 3/3 |
 | L7 matmul | — | none passes yet | — | — | — | 0/7 |
-| L8 layernorm | — | none passes yet | — | — | — | 0/0 |
-| L9 band_attention | — | none passes yet | — | — | — | 0/0 |
-| L10 conv1d | — | none passes yet | — | — | — | 0/4 |
+| L8 layernorm | `kernels/final/l8_layernorm.py` | ours vf0c39f run3 | 32/32 cases | 2.00x | 675323 | 1/6 |
+| L9 band_attention | — | re-check pending (the first pick fails our column-slice rule) | — | — | — | — |
+| L10 conv1d | `kernels/final/l10_conv1d.py` | ours ve22cca run2 | 4/4 cases | 12.24x | 30420 | 1/17 |

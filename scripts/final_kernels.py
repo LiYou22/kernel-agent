@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from kagent import judge  # noqa: E402
+from kagent.harness import verify  # noqa: E402
 from kagent.levels import LEVELS  # noqa: E402
 from roofline import measure  # noqa: E402
 
@@ -33,8 +34,15 @@ for path in sorted(glob.glob(str(ROOT / "results/**/*.jsonl"), recursive=True)):
         if src:
             cands.append((lv, tag, Path(path).relative_to(ROOT).as_posix(), src))
 
-best, tried = {}, {}
+best, tried, seen = {}, {}, set()
 for lv, tag, path, src in cands:
+    if (lv, src) in seen:          # repeats of one prompt are often byte-identical (notes E27)
+        continue
+    seen.add((lv, src))
+    # both checkers: ours (rules incl. the PR #10 column-slice fix, dev and holdout) and theirs
+    if not (verify(LEVELS[lv], src).passed and verify(LEVELS[lv], src, holdout=True).passed):
+        tried.setdefault(lv, [0, 0])[0] += 1
+        continue
     ok, msg = judge.check(lv, src)
     tried.setdefault(lv, [0, 0])
     tried[lv][0] += 1
@@ -54,8 +62,8 @@ out.mkdir(parents=True, exist_ok=True)
 for old in out.glob("l*.py"):
     old.unlink()
 rows = ["# Final kernels", "",
-        "One kernel per level, chosen by `scripts/final_kernels.py`: written by the agent, verified by our",
-        "harness, and passing the organizers' `kernelbench.py`; among those, the lowest roofline time, then",
+        "One kernel per level, chosen by `scripts/final_kernels.py`: written by the agent, passing our current",
+        "harness (rules, dev and holdout) and the organizers' `kernelbench.py`; among those, the lowest roofline time, then",
         "the fewest instructions. Kernels seeded from our hand-written references (e.g. the optimised",
         "softmax of notes E19) are excluded: only kernels the agent wrote count.", "",
         "| level | kernel file | from | organizers' checker | roofline time | instructions | candidates passing / checked |",

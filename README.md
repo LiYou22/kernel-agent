@@ -6,7 +6,8 @@ model writes freely, the harness finds what is wrong, and the agent translates t
 concrete change. A second stage makes verified kernels cheaper (FLOPs, HBM traffic, instructions)
 without ever making them wrong.
 
-Results, design and every experiment: `notes/notes.tex` (E1–E23). Team plan and status: `TEAM.md`.
+The story: `notes/paper.tex` (paper). Every experiment: `notes/notes.tex` (lab log, E1–E31). Final
+kernel per level: `FINAL.md`. Team plan and status: `TEAM.md`. Demo script: `demo/DEMO.md`.
 Deliverables: agent `kagent/`, harness `kagent/harness.py` (tolerance = proven float32 error bound),
 eval set `EVALSET.md`, failure taxonomy `TAXONOMY.md`, token instrumentation `scripts/plot_tokens.py`.
 
@@ -16,12 +17,15 @@ eval set `EVALSET.md`, failure taxonomy `TAXONOMY.md`, token instrumentation `sc
 
 ```bash
 uv sync
-uv run pytest -q                                   # expect: 59 passed
+uv run pytest -q                                   # expect: 74 passed
+export KERNELBENCH_DIR=/path/to/02-kernel-agent   # the organizers' kernelbench.py (final gate)
 uv run python -m kagent.harness 4 kernels/hand/l4_rmsnorm.py          # PASS, within the float32 bound
 uv run python -m kagent.harness 3 kernels/broken/l3_overwrite_per_tile.py --fixes   # names the bug
 uv run python -m kagent.agent --levels 1 2 --scripted tests/scripts/demo.json --out runs/demo.jsonl
 uv run python scripts/plot_tokens.py runs/demo.jsonl                  # input tokens per attempt, by section
 uv run python scripts/list_cases.py                                   # regenerates EVALSET.md
+uv run python scripts/reward.py results/seat-130/ours-L1234-seat-130.jsonl   # per-run reward
+uv run python scripts/final_kernels.py                                # FINAL.md: both checkers
 ```
 
 **2. With the model, on a seat pod** (Qwen3-8B on vLLM, started by `/workspace/serve.sh`)
@@ -32,7 +36,7 @@ aws eks update-kubeconfig --name hack-hyd --region ap-south-2
 export POD=seat-NNN
 kubectl exec $POD -c app -- bash -c 'curl -s localhost:8000/health -o /dev/null -w "%{http_code}\n"'   # 200
 scripts/sync.sh                                    # push tracked files to /workspace/stageA
-scripts/launch.sh ours 1 2 3 4                     # background; 8 attempts, 5 runs per level
+scripts/launch.sh ours 1 2 3 4                     # background; 5 runs per level (REPEAT=n)
 scripts/launch.sh naive 1 2 3 4                    # ablation: the checker's report sent back verbatim
 kubectl exec $POD -c app -- bash -c 'tail -n 20 /workspace/stageA/runs/*.log'
 scripts/fetch.sh                                   # copies the logs to results/$POD/
@@ -50,12 +54,21 @@ python3 scripts/optimize.py --from runs/ours-L1234-seat-130.jsonl --rounds 3 --o
 uv run python scripts/opt_report.py $R/opt2-live.jsonl
 ```
 
-`main` is agent v2 (version `e22ccab872`, 8 attempts), the version every benchmark arm so far ran.
-Branch `v3` (version `ea9befddac`) holds the next iteration (notes E23): structural directives may
-rewrite loops, one remedy per directive, crash-specific fixes, 12 attempts.
+`main` is the final agent, version `f0c39f1e0f`: v4 (the organizers' signatures, and their
+`kernelbench.py` as the final acceptance gate) merged with the teammate's v3-rewrite (PR #10: a
+whole-kernel rewrite in the op's legal loop shape when a draft breaks many rules, progress-aware
+stuck detection, and a checker fix for column slices longer than one tile). Without `kernelbench.py`
+a kernel is reported `verified-unjudged` (confidence 0.6), never `verified`.
 
-Expected (seat-130, version `e22ccab872`): `ours` L1 5/5, L2 4/5, L3 5/5, L4 1/5; the optimiser
-accepts 5 of 11 rewrites, with up to 79x fewer instructions (`notes/fig-opt2.png`).
+Every number is tied to the code version it was measured on (logged with each result):
+
+| result | version | where |
+|---|---|---|
+| ours 15/20 vs naive 4/20 on L1–L4 | v2 `e22ccab872` | `results/seat-130` |
+| v3 3/9 vs v2 1/25 on L4–L6 (pre-registered) | v3 `29fd8d90d5` | `results/seat-130`, `seat-133` |
+| L8 5/5, L9 4/5 (our checker, old L8 signature) | v3-rewrite | `results/seat-134`, `seat-245`, `seat-246` |
+| L8 1/3, passing the organizers' checker | final `f0c39f1e0f` | `results/seat-130` |
+| optimiser: up to 79x fewer instructions | v2 kernels | `results/seat-130/opt2-live.jsonl` |
 
 ## Things that will bite you
 

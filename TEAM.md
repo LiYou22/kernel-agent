@@ -14,18 +14,26 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 16:20 EDT)
+## Status and open items (updated 17:50 EDT)
 
-**Done (v2, `e22ccab872`)**: `ours` L1–4 15/20 vs `naive` L1–4 4/20 (seat-130); `ours` L5–7 0/5 on
-both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-correct).
-**Running**: v3 (`29fd8d90d5`) `ours` L4–L6 on seat-130 since 15:35 (3 runs, 12 attempts). v3 changed at 15:30 (row-norm broadcast/layout errors now get the per-column loop); **anything started on an earlier v3 (`eddb241adf`) must be restarted after `git pull` on branch v3.**
+**Final agent: `main`, version `f0c39f1e0f`** = v4 (organizers' signatures + their `kernelbench.py` as
+the final gate) merged with v3-rewrite (PR #10). 74 tests. Freeze 18:00; submission = a PR to
+`yahavb/trainium-agent-labs` from the fork `LiYou22/trainium-agent-labs`, folder
+`projects/team-27-kernel-agent/`.
 
-**Benchmark slices still unclaimed, reassigned** (seat-130 took `naive` L1–4 and `ours` L5–7):
-
-| seat | slice to run now (agent **v4**, branch `v4`, version `174153fd32`) |
+| result | version |
 |---|---|
-| 130 | `ours` L4, L7 (3 runs) — running since 16:15 |
-| 134 / 245 / 246 (Erfu) | **stop anything on L8 that used v2/v3** (the L8 signature changed); run `ours` v4 on L8, L9, L10, and if a pod is free L5, L6 |
+| `ours` 15/20 vs `naive` 4/20 on L1–4 | v2 `e22ccab872` |
+| v3 3/9 vs v2 1/25 on L4–6 (pre-registered, adopted) | v3 `29fd8d90d5` |
+| v4: L4 0/3, L7 0/3 | v4 `174153fd32` |
+| L8 5/5, L9 4/5 under our checker (old L8 signature) | v3-rewrite |
+| L8 1/3, passing the organizers' checker | final `f0c39f1e0f` |
+| final kernel per level, both checkers | `FINAL.md` |
+
+**Running (Erfu, 17:37)**: version `c5e98d5a75` on seats 134/245/246, L1–L10, 5 runs. Note: at 17:38
+`scripts/sync.sh` from seat-130 overwrote `/workspace/stageA` on those pods with `main`; the running
+processes are unaffected (all code is imported at start), but re-sync your own version before any
+restart, and push `c5e98d5a75` to a branch so its results can be reproduced.
 
 **Why v4** (notes E29): under the organizers' `kernelbench.py`, L4 failed 0/32 because their signature
 is `kernel(x, eps=1e-6)` (ours had `g`), L8 likewise (`kernel(x, eps=1e-5)`), and L7/L10 kernels failed
