@@ -5,7 +5,7 @@
 \usepackage{xcolor}
 \usepackage{listings}
 \usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
-\usepackage{amsmath}
+\usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{enumitem}
 \setlist{nosep,leftmargin=*}
@@ -535,6 +535,62 @@ magnitude''. The model took the second and computed the maximum with \code{np.ma
 attempt 8 was a rule violation and the level ran out of attempts. Lesson: a directive must offer
 one remedy that cannot itself break a rule. To change after this benchmark round (the harness is
 frozen while the pods run, so all arms share one version).
+
+\entry{Interim results: v2, \code{ours}, L1--4, seat-130 (18:06 UTC)}{2026-10-10}
+\begin{tabular}{@{}lllllll@{}}
+\toprule
+Level & run 1 & run 2 & run 3 & run 4 & run 5 & so far \\
+\midrule
+L1 relu & \checkmark\,2 & \checkmark\,2 & \checkmark\,1 & \checkmark\,1 & \checkmark\,2 & 5/5 \\
+L2 row sum & \checkmark\,3 & \checkmark\,5 & \checkmark\,2 & stuck 6 & \checkmark\,5 & 4/5 \\
+L3 row max & \checkmark\,7 & \checkmark\,6 & \checkmark\,3 & \checkmark\,6 & running & 4/4 \\
+L4 RMSNorm & failed 8 & failed 8 & stuck 4 & \checkmark\,6 & -- & 1/4 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+(Numbers are attempts.) The task wordings make runs differ (run 3 and 4 solve L1 in one attempt:
+those wordings never trigger \code{np.asarray}). L4 is solved for the first time in run 4. No naive-arm
+data yet: seats 132--134 have not started.
+
+\entry{E14: the efficiency stage and its roofline model}{2026-10-10}
+Efficiency is a demo focus, so it became a second stage (\code{scripts/optimize.py}, outside
+\code{kagent/} so the benchmark's code version is unchanged): take a verified kernel, turn its worst
+excess into one optimisation directive, accept the rewrite only if it passes dev \emph{and} holdout
+with no violation and is cheaper. A first rule (``no metric may get worse'') rejected an online
+softmax that cut HBM reads $3\to2\times$ while FLOPs rose $1.4\to2\times$; but these ops are memory
+bound (0.25--0.44 FLOP/byte against a ridge of 222), so that is a win. The rule is now a roofline
+time, $t=\max(\text{HBM bytes}, \text{FLOPs}/222)$, reported as a multiple of the op's minimum
+(1.00 = at the roofline), with instruction count reported and capped. Hand kernels: L1, L2 at
+$1.00\times$, RMSNorm $1.50\times$, matmul $1.56\times$, softmax $2.00\times$.
+
+\entry{E15: per-element loops looked free}{2026-10-10}
+The first optimiser log showed model kernels with 0 FLOPs and 0 instructions. Cause: \code{x[r, c]}
+returns a numpy scalar, and scalar arithmetic never reaches the guarded array, so per-element
+python loops were invisible to the cost ledger. Efficiency measurement now wraps scalar reads in 0-d
+guarded arrays (scripts only; pass/fail still uses the unpatched harness). Result: a per-element
+L3 kernel issues 135{,}061 instructions of 1 element; the hand kernel 2{,}062 of 66. \textbf{5 of 6
+verified model kernels for L2/L3 are per-element loops, about $65\times$ the instructions of the hand
+kernel, and every one passes the correctness check.} Efficiency is invisible to correctness.
+
+\entry{E16: first live optimiser pass: 0 of 13 rewrites accepted}{2026-10-10}
+Six model kernels (L2/L3, runs 1--3) and three hand kernels (RMSNorm, softmax, matmul): 6 rewrites
+broke a rule, 2 broke correctness, 5 were not cheaper; none accepted, and the acceptance gate kept
+every kernel correct. The ``fewer instructions'' directive mostly produced \code{np.sum}/\code{np.max}
+(the E13 failure again: an optimisation hint that tempts a banned call), and the online-softmax hint
+produced a wrong kernel. Next: optimisation directives need the same treatment as repair directives:
+one concrete, rule-safe change with a snippet (e.g.\ ``replace the loop over rows with the column slice
+\code{acc = np.maximum(acc, x[i0:i1, j])}''), plus a diagnosis that recognises per-element loops.
+
+\entry{E17: PR \#1 solves NKI level 4; its lesson applies to us}{2026-10-10}
+A teammate's sidecar v2 on the upstream NKI agent solved NKI level 4 (tiled matmul) in run 2 (run 1:
+0.75), where upstream's best was 0.62; rate pending. The key change: the baseline repair prompt said
+``change exactly what the checker names and keep everything else identical'' while the checker asked
+for a loop-structure change; the model obeyed the first (72 of 80 L4 attempts hit the same error).
+\textbf{Our repair prompt ends with the same sentence}, and our structural directives
+(\code{per-tile-stat}, \code{tile-overwrite}, partial tiles) need loops rebuilt. Likely part of our L4
+difficulty; for v3, structural directives will ask to rewrite the loop structure. PR \#1 is merged
+into \code{upstream-nki/}.
 
 %==============================================================================
 \section{Team}
