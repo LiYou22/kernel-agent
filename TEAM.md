@@ -1,92 +1,107 @@
-# 分工（截止 2026-10-10 21:00 EDT）
+# Team plan (deadline 2026-10-10 21:00 EDT)
 
-每个 seat 都有自己的芯片和模型服务，所以 benchmark 按 seat 分成 4 份同时跑，代码只由 seat-130 修改。
+Every seat has its own chip and model server, so the benchmark is split into four slices that run
+in parallel, one per seat. Only seat-130 edits the agent/harness code.
 
-| seat | 人 | 主要任务 | 这个 pod 跑的 benchmark |
+| seat | role | main task | benchmark slice on this pod |
 |---|---|---|---|
-| **130** | 主力开发 | agent / 检查器；L8–10 检查器；修复 red team 找到的漏洞；合并 | `ours` L1–4 |
-| **132** | 实验与分析 | 盯 4 个 pod 的 benchmark，收结果，出表和图，置信度校准 | `naive` L1–4 |
-| **133** | red team | 写骗过检查器的 kernel（漏判）和被冤枉的正确 kernel（误判） | `ours` L5–7 |
-| **134** | 报告与 demo | 一页复现说明、demo 主线、Stage B（NKI）对照章节、交付清单 | `naive` L5–7 |
+| **130** | core dev | agent / harness; L8–10 harness; fix holes found by the red team; merge | `ours` L1–4 |
+| **132** | experiments & analysis | watch all four pods, collect results, tables and plots, confidence calibration | `naive` L1–4 |
+| **133** | red team | kernels that fool the harness (false passes) and correct kernels it rejects (false fails) | `ours` L5–7 |
+| **134** | write-up & demo | one-page reproduction note, demo storyline, Stage B (NKI) comparison, deliverables checklist | `naive` L5–7 |
 
-`ours` = 我们的 agent（翻译成指令 + 已试清单 + 坏回复拦截）；`naive` = 对照组（检查器报告原样发回）。
-两组除了反馈方式，其它完全一样（停止规则、留出卷、打分）。每遍换一种任务说法（见 notes E10）。
+`ours` = our agent (verdict translated into one instruction + ledger of failed attempts + reply
+gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
+stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## 时间点
+## Checkpoints
 
-| 时间 (EDT) | 检查点 |
+| time (EDT) | checkpoint |
 |---|---|
-| 14:00 | 4 个 pod 都在跑 benchmark |
-| 16:00 | L1–7 第一版结果表（132） |
-| 16:30 | L8–10 检查器完成（130），各 pod 加跑 L8–10 |
-| 18:30 | 全部结果汇总（132） |
-| 19:00 | 代码冻结 |
-| 20:00 | 报告初稿（134） |
-| 20:45 | 定稿提交 |
+| 14:00 | all four pods running their slice |
+| 16:00 | first L1–7 results table (132) |
+| 16:30 | L8–10 harness done (130); every pod adds its L8–10 slice |
+| 18:30 | all results aggregated (132) |
+| 19:00 | code freeze |
+| 20:00 | write-up draft (134) |
+| 20:45 | final submission |
 
-## 每个人第一步：在自己的 pod 上跑起来（约 10 分钟）
+## Everyone, first: get your pod running (~10 min)
 
-在笔记本上：
+On your laptop:
 
 ```bash
 git clone git@github.com:LiYou22/kernel-agent.git && cd kernel-agent
-# 粘贴频道里最新的 AWS 凭据（macOS/Linux 那段），然后：
+# paste the latest AWS credentials from the channel (macOS/Linux block), then:
 aws eks update-kubeconfig --name hack-hyd --region ap-south-2
-export POD=seat-13X                      # 换成你的 seat
+export POD=seat-13X                      # your seat
 
-# 1. 模型服务在不在？要看到 200
+# 1. is the model server up? expect 200
 kubectl exec $POD -c app -- bash -c 'curl -s -m 5 localhost:8000/health -o /dev/null -w "%{http_code}\n"'
-#    不是 200：kubectl exec -it $POD -- bash，然后 cd /workspace && ./serve.sh，等 READY（约 4 分钟）
+#    not 200: kubectl exec -it $POD -- bash, then cd /workspace && ./serve.sh, wait for READY (~4 min)
 
-# 2. 推代码 + 自测（应当全部 passed）
+# 2. push the code and self-test (all should pass)
 scripts/sync.sh
 kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'
 
-# 3. 启动你那一份（后台跑，断线不影响）
+# 3. start your slice (background; survives a dropped connection)
 scripts/launch.sh ours 1 2 3 4      # seat-130
 scripts/launch.sh naive 1 2 3 4     # seat-132
 scripts/launch.sh ours 5 6 7        # seat-133
 scripts/launch.sh naive 5 6 7       # seat-134
 
-# 4. 看进度
+# 4. watch progress
 kubectl exec $POD -c app -- bash -c 'tail -n 20 /workspace/stageA/runs/*.log'
 
-# 5. 跑完后取回结果并提交（results/ 进 git）
+# 5. when done, fetch results and commit them (results/ is tracked in git)
 scripts/fetch.sh && git add results/$POD && git commit -m "results: $POD" && git push
 ```
 
-注意：
-- **不要在请求里加 `seed`**：Neuron 版 vLLM 会直接崩溃（notes E5）。
-- 同一个 pod 别同时跑两个 benchmark，模型服务最多并发 4 个请求，会互相拖慢。
-- 凭据过期（`ExpiredToken`）就重新粘贴；pod 里的进程不受影响。
+Notes:
+- **Never send `seed` in a request**: the Neuron build of vLLM crashes (notes E5).
+- Do not run two benchmarks on one pod at once; the model server serves at most 4 requests
+  concurrently and they slow each other down.
+- When credentials expire (`ExpiredToken`), paste the new block; processes in the pod keep running.
 
-## 各自的任务细节
+## Task details
 
-### seat-130：主力开发
-- L8 layernorm、L9 窗口 attention、L10 卷积：reference、误差上界、刁难测试、手写/故意错误 kernel、翻译器覆盖。
-- 处理 133 提交的漏洞（`kernels/redteam/`），每修一个加一条测试。
-- 19:00 代码冻结。
+### seat-130: core dev
+- L8 layernorm, L9 windowed attention, L10 1-D convolution: reference, error bound, hostile
+  cases, hand-written and deliberately broken kernels, translator coverage.
+- Fix holes reported by 133 (`kernels/redteam/`); add a test for each fix.
+- Code freeze at 19:00.
 
-### seat-132：实验与分析
-- 汇总：`uv run python scripts/analyze.py ours=results/seat-130/<file>.jsonl naive=results/seat-132/<file>.jsonl --tex notes/generated/results-L1234.tex`（L5–7 同理用 133、134 的文件）。
-- token 图：`uv run python scripts/plot_tokens.py results/seat-130/<file>.jsonl`。
-- 校准：verified 的比例、dev-only 的比例；有没有 verified 但其实错的（用 133 的 red team 测试复查）。
-- 交付：结果表、图、失败分类计数（16:00 第一版，18:30 终版），放进 `notes/generated/`。
+### seat-132: experiments & analysis
+- Aggregate: `uv run python scripts/analyze.py ours=results/seat-130/<file>.jsonl naive=results/seat-132/<file>.jsonl --tex notes/generated/results-L1234.tex`
+  (same for L5–7 with the files from 133 and 134).
+- Token plots: `uv run python scripts/plot_tokens.py results/seat-130/<file>.jsonl`.
+- Calibration: share of `verified` vs `dev-only`; any `verified` kernel that is actually wrong
+  (re-check with 133's red-team cases).
+- Deliverables: results tables, plots, failure-class counts (first version 16:00, final 18:30),
+  in `notes/generated/`.
 
-### seat-133：red team
-挑战原文："如果检查器抓不到你自己写的 bug，它也抓不到模型的。"
-- **漏判**：写错误但能通过检查的 kernel（只在特定形状错、绕过规则的写法、用掉误差上界的“合法”错误……）。
-- **误判**：写正确但被判错/判违规的 kernel（不常见但合法的写法）。
-- 每个发现：`kernels/redteam/l<N>_<名字>.py` + 文件开头一行注释说明，push 后告诉 130。
-- 本地验证：`uv run python -m kagent.harness <N> kernels/redteam/<file>.py -v --fixes`。
+### seat-133: red team
+From the challenge: "if the harness can't catch your own deliberate bug, it will not catch the model's."
+- **False passes**: write wrong kernels that pass (wrong only on particular shapes, rule
+  violations the checks miss, errors that hide inside the bound, ...).
+- **False fails**: write correct kernels that get rejected or flagged (unusual but legal code).
+- For each finding: `kernels/redteam/l<N>_<name>.py` with a one-line comment at the top saying
+  what it shows; push and tell 130.
+- Check locally: `uv run python -m kagent.harness <N> kernels/redteam/<file>.py -v --fixes`.
 
-### seat-134：报告与 demo
-- 一页复现说明（环境、命令、预期输出）。
-- demo 主线：一次失败与恢复。现成例子：L2 残块索引越界后修好；L3 的 E9（翻译器说不出原因 → 加诊断）。
-- Stage B 对照：基于 `baselines/upstream-nki/`（上游 NKI agent 5 遍：L2 5/5，L1/L3 恒为 0.30=全部崩溃，L4 恒为 0.62），写“NKI 上失败是 API 误用，不是数值错误”一节。
-- 交付清单逐项核对：agent、检查器（含容差理由）、测试集、失败分类、token 统计、复现说明。
-- 20:00 初稿，20:45 定稿。
+### seat-134: write-up & demo
+- One-page reproduction note (environment, commands, expected output).
+- Demo storyline: one failure and its recovery. Ready-made examples: L2 indexes the partial tile
+  out of bounds, then recovers; L3 / E9 (the translator could not name the cause, then a new
+  diagnostic could).
+- Stage B comparison from `baselines/upstream-nki/` (upstream NKI agent, 5 runs: L2 5/5, L1/L3
+  always 0.30 = every shape crashed, L4 always 0.62): a section on "on NKI the failures are API
+  misuse, not wrong numerics".
+- Check every deliverable: agent, harness (with tolerance rationale), eval set, failure taxonomy,
+  token instrumentation, reproduction note.
+- Draft 20:00, final 20:45.
 
-## 参考
-- 设计与实验记录：`notes/notes.tex`（英文）；中文通俗版在仓库外，由 130 维护。
-- 上游 NKI baseline：`baselines/upstream-nki/`（只读，不要在本机运行其中的脚本）。
+## References
+- Design and experiment log: `notes/notes.tex` (English). Plain-language Chinese and Korean
+  versions live outside the repo, maintained by 130.
+- Upstream NKI baseline: `baselines/upstream-nki/` (read-only; do not run its scripts locally).
