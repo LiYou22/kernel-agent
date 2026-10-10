@@ -114,6 +114,8 @@ def test_cost_counts_rereads():
     (6, "l6_skip_partial.py", "numeric:partial-row"),
     (7, "l7_drop_k_tail.py", "numeric:tag:partial-k-tile"),
     (8, "l8_naive_variance.py", "numeric:cancellation"),
+    # live L4: two bugs at once; the verified hypothesis covers 6 of 9 wrong cases and goes first
+    (4, "l4_live_two_bugs.py", "numeric:per-tile-stat"),
     (9, "l9_causal.py", "numeric:one-sided"),
     (9, "l9_no_max_subtraction.py", "numeric:nonfinite"),
     (10, "l10_ignore_dilation.py", "numeric:dilation"),

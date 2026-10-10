@@ -213,6 +213,14 @@ def common_facts(fails):
     return [f for f in sorted(strong) if support[f] >= 0.9 * len(measured)], len(measured)
 
 
+def fact_support(fails, needle):
+    """(cases with a fact containing `needle`, numerically wrong cases). Matching by substring lets
+    facts that carry per-case numbers (offsets, cut points) count together."""
+    measured = [r.facts for r in fails if r.status in ("wrong", "nonfinite")]
+    k = sum(any(needle in f and not f.startswith("~") for f in fs) for fs in measured)
+    return k, len(measured)
+
+
 def _common_facts(fails):
     common, n = common_facts(fails)
     if not common:

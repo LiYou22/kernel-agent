@@ -10,7 +10,7 @@ change every round; the class doesn't) and the taxonomy groups by it.
 """
 from dataclasses import dataclass
 
-from .harness import ROUNDING_CEILING, common_facts, pattern_tag
+from .harness import ROUNDING_CEILING, common_facts, fact_support, pattern_tag
 from .rules import TILE_C, TILE_R
 
 # a kernel can break several rules; fix the ones that change its structure first
@@ -149,17 +149,70 @@ def translate(rep):
     return _numeric(rep)
 
 
+# Level-specific hypotheses (explain hooks) are checked numerically against the reference, so
+# they are not coincidences: one that explains half the wrong cases is worth fixing first even
+# when a second bug causes the rest (live L4: per-tile statistic AND float32 squares overflowing).
+HYPOTHESES = [
+    ("mean is large compared to their spread", "numeric:cancellation",
+     "Only rows whose mean is large next to their spread are wrong: the variance computed as "
+     "mean(x**2) - mean(x)**2 cancels catastrophically (and can go negative). Compute the mean "
+     "first, then the variance as the mean of (x - mean)**2 in a second pass, accumulating in "
+     "float64."),
+    ("column tile only", "numeric:tile-overwrite",
+     "Each wrong row's result is the result over a single column tile only: the per-row result is "
+     "overwritten for every column tile instead of combined across tiles. Keep one running value "
+     "per row across ALL column tiles: initialize it before the column-tile loop, combine each tile "
+     "into it inside the loop, and write it to the output only after the loop."),
+    ("tile alone, not of the whole row", "numeric:per-tile-stat",
+     "Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile "
+     "alone. The statistic must cover the WHOLE row: first loop over all column tiles to accumulate "
+     "it, then loop over the tiles again to write the output."),
+    ("of K only", "numeric:partial-k",
+     "Part of K is left out of the sum. Loop `for k0 in range(0, K, step)` with "
+     "`k1 = min(k0 + step, K)` and use its real size k1 - k0, so every k in 0..K-1 contributes."),
+    ("last partial K tile is missing", "numeric:partial-k",
+     "The last, partial K tile is left out of the sum. Loop `for k0 in range(0, K, step)` with "
+     "`k1 = min(k0 + step, K)` and use its real size k1 - k0, so every k in 0..K-1 contributes."),
+    ("result for window w", "numeric:band-edge",
+     "The window has the wrong width: it must include both edges, j from max(0, i - w) to "
+     "min(S - 1, i + w) inclusive (2w + 1 keys away from the sequence ends)."),
+    ("one-sided (causal) window", "numeric:one-sided",
+     "The window is two-sided: include keys after the query (j up to min(S - 1, i + w)) as well "
+     "as before it (j down to max(0, i - w))."),
+    ("the dilation is ignored", "numeric:dilation",
+     "The dilation is ignored. Tap k of output t reads x[c, t*stride + k*dilation], so the slice "
+     "for tap k starts at t0*stride + k*dilation."),
+    ("copied without transposing", "numeric:not-transposed",
+     "Wrong outputs hold x[r, c] at out[r, c]: the data was copied, not transposed. Write row i of "
+     "each input tile into column i of the output: out[j0:j1, i] = x[i, j0:j1]."),
+    ("instead of x[c, r]", "numeric:tile-origin",
+     "Wrong outputs are read from the wrong place (an offset in the tile origin). Inside a tile, "
+     "add the tile origin to every index: the input row is i0 + r and the output row is j0 + c."),
+]
+
+
+def _hypothesis(fails, evidence):
+    best = None
+    for needle, key, instruction in HYPOTHESES:
+        k, n = fact_support(fails, needle)
+        if n and k >= 0.5 * n and (best is None or k > best[0]):
+            best = (k, n, key, instruction)
+    if best is None:
+        return None
+    k, n, key, instruction = best
+    if k < n:
+        instruction += (f" (This explains {k} of the {n} wrong cases; fix it first, the others may "
+                        f"have a second cause.)")
+    return Directive(key, instruction, evidence)
+
+
 def _numeric(rep):
     fails = [r for r in rep.results if r.status != "pass"]
     evidence = rep.numeric_feedback(max_cases=1)
     facts, _ = common_facts(fails)
-    if any("mean is large compared to their spread" in f for f in facts):
-        return Directive("numeric:cancellation",
-                         "Only rows whose mean is large next to their spread are wrong: the "
-                         "variance computed as mean(x**2) - mean(x)**2 cancels catastrophically "
-                         "(and can go negative). Compute the mean first, then the variance as the "
-                         "mean of (x - mean)**2 in a second pass, accumulating in float64.",
-                         evidence)
+    hyp = _hypothesis(fails, evidence)
+    if hyp:
+        return hyp
     pt = pattern_tag(rep.results)
     if pt and (rep.level.name, pt[0]) in LEVEL_TAG_FIX:
         return Directive(f"numeric:tag:{pt[0]}", LEVEL_TAG_FIX[rep.level.name, pt[0]], evidence)
@@ -178,16 +231,6 @@ def _numeric(rep):
 
     fact = lambda s: any(s in f for f in facts)
     const = next((f.rsplit(" ", 1)[1] for f in facts if f.startswith("every wrong output is exactly")), None)
-    tile_only = next((f for f in facts if "column tile only" in f), None)
-    if tile_only:
-        which = tile_only.split("over the ")[1].split(" column")[0]
-        return Directive("numeric:tile-overwrite",
-                         f"Each wrong row's result is the result over the {which} column tile "
-                         f"only: the per-row result is overwritten for every column tile instead "
-                         f"of combined across tiles. Keep one running value per row across ALL "
-                         f"column tiles: initialize it before the column-tile loop, combine each "
-                         f"tile into it inside the loop, and write it to the output only after "
-                         f"the loop.", evidence)
     if const is not None and fact("negative expected value"):
         return Directive("numeric:identity",
                          f"Outputs whose true value is negative come out as exactly {const}: the "
@@ -199,43 +242,6 @@ def _numeric(rep):
                          f"Only the last {axis} is wrong: an off-by-one in the {axis} bounds. "
                          f"The end of each tile must be min(start + tile, size), and loops must "
                          f"run up to the size itself, not size - 1.", evidence)
-    if fact("tile alone, not of the whole row"):
-        return Directive("numeric:per-tile-stat",
-                         "Each column tile is normalised with a statistic (max, sum or mean of "
-                         "squares) of that tile alone. The statistic must cover the WHOLE row: "
-                         "first loop over all column tiles to accumulate it, then loop over the "
-                         "tiles again to write the output.", evidence)
-    if fact("last partial K tile is missing") or fact("first") and fact("values of K only"):
-        return Directive("numeric:partial-k",
-                         "The last, partial K tile is left out of the sum. Loop "
-                         "`for k0 in range(0, K, step)` with `k1 = min(k0 + step, K)` and use "
-                         "its real size k1 - k0, so every k in 0..K-1 contributes.", evidence)
-    if fact("result for window w - 1") or fact("result for window w + 1"):
-        return Directive("numeric:band-edge",
-                         "The window has the wrong width: it must include both edges, j from "
-                         "max(0, i - w) to min(S - 1, i + w) inclusive (2w + 1 keys away from the "
-                         "sequence ends).", evidence)
-    if fact("one-sided (causal) window"):
-        return Directive("numeric:one-sided",
-                         "The window is two-sided: include keys after the query (j up to "
-                         "min(S - 1, i + w)) as well as before it (j down to max(0, i - w)).",
-                         evidence)
-    if fact("the dilation is ignored"):
-        return Directive("numeric:dilation",
-                         "The dilation is ignored. Tap k of output t reads "
-                         "x[c, t*stride + k*dilation], so the slice for tap k starts at "
-                         "t0*stride + k*dilation.", evidence)
-    if fact("copied without transposing"):
-        return Directive("numeric:not-transposed",
-                         "Wrong outputs hold x[r, c] at out[r, c]: the data was copied, not "
-                         "transposed. Write row i of each input tile into column i of the "
-                         "output: out[j0:j1, i] = x[i, j0:j1].", evidence)
-    off = next((f for f in facts if "instead of x[c, r]" in f), None)
-    if off:
-        return Directive("numeric:tile-origin",
-                         f"Wrong outputs are read from the wrong place: {off.split('; ')[0]}. "
-                         f"Inside a tile, add the tile origin to every index: the input row is "
-                         f"i0 + r and the output row is j0 + c.", evidence)
     lv = rep.level
     for ax, name in enumerate(lv.out_axes):
         T = lv.out_tile[ax]
