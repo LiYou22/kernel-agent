@@ -253,14 +253,17 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             continue
 
         r, src, rep = max(cands, key=lambda c: _rank(c[2]))
-        judge_fail = None
+        judge_fail, judged = None, True
         if rep.passed:
             ok, jmsg = judge.check(level.num, src)
-            if not ok:
+            judged = ok is not None
+            if ok is False:
                 judge_fail = judge_directive(level, jmsg)
         if rep.passed and judge_fail is None:
             hold = verify(level, src, holdout=True, timeout_s=HOLDOUT_TIMEOUT_S)
             status, conf = ("verified", 0.95) if hold.passed else ("dev-only", 0.3)
+            if hold.passed and not judged:      # never claim the final check that did not run
+                status, conf = "verified-unjudged", 0.6
             _log(log, Attempt(**base, outcome="pass", summary=rep.summary(), code=src))
             say(_line(level, att, sections, r, f"PASS dev; holdout {hold.n_pass}/{len(hold.results)}"))
             res = Result(level.num, run, status, conf, att, tin, tout, None,

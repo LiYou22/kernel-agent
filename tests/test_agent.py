@@ -95,3 +95,11 @@ def test_v3_crash_directive_names_the_fix():
 
 def render_text(parts):
     return "\n\n".join(t for _, t in parts)
+
+
+def test_missing_organizers_checker_is_not_verified(monkeypatch):
+    # red team PR #9: the final gate used to pass when kernelbench.py was absent
+    from kagent import judge
+    monkeypatch.setattr(judge, "available", lambda: False)
+    res, _ = run([GOOD])
+    assert res.status == "verified-unjudged" and res.confidence < 0.95

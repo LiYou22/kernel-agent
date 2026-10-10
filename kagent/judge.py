@@ -27,9 +27,10 @@ def available():
 
 
 def check(level_num, source):
-    """(passed, message). Message is the first failure, in the organizers' words."""
+    """(passed, message): passed is None when the checker is unavailable (never counts as a pass)."""
     if not available():
-        return True, "organizers' checker not found; gate skipped"
+        # red team PR #9: passing here made a kernel "verified 0.95" with no final check at all
+        return None, "organizers' checker not found: NOT judged"
     ns = {}
     try:
         with contextlib.redirect_stdout(io.StringIO()):
