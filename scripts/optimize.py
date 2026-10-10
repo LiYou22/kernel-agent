@@ -33,18 +33,22 @@ TILE = TILE_R * TILE_C
 IMPROVE = 0.05      # a rewrite must cut roofline time by at least 5%
 MAX_OPS_GROWTH = 2.0  # instruction count is mostly an artefact of the column-loop rules: reported, capped
 
-# where the excess usually comes from, per op; generic advice otherwise
-READ_HINT = {
-    "softmax": "Use an online softmax: in ONE pass over the column tiles keep a running max m and a "
-               "running sum s per row (when m grows to m_new, rescale s by exp(m - m_new)), then a "
-               "second pass writes exp(x - m) / s. That reads x twice instead of three times.",
-    "rmsnorm": "Accumulate the sum of squares in the first pass and write the output in the second; "
-               "do not read x a third time.",
-    "layernorm": "Accumulate the sum and the sum of squared deviations from a running mean "
-                 "(Welford) in one pass, then write the output in a second pass.",
-    "matmul": "Reuse each loaded tile as much as possible: load an a tile once and use it against "
-              "the whole N extent of the b tile before loading the next.",
-}
+# v2 (E16): an optimisation directive gets the same treatment as a repair directive: one concrete,
+# rule-safe change with the code to write, aimed at a diagnosed pattern, and never a target the
+# tile rules make impossible. Abstract hints ("fewer instructions") made the model reach for
+# np.sum/np.max (6 of 13 rewrites broke a rule).
+ROW_REDUCE = {"row_sum": ("acc = np.zeros(i1 - i0, dtype=np.float64)", "acc += x[i0:i1, j]"),
+              "row_max": ("acc = np.full(i1 - i0, -np.inf, dtype=np.float32)",
+                          "acc = np.maximum(acc, x[i0:i1, j])")}
+ROW_NORM = {"rmsnorm", "softmax", "layernorm"}
+NO_REDUCTIONS = "Keep reductions as explicit loops over columns; do not call np.sum, np.max or np.mean."
+
+ONLINE_SOFTMAX = (
+    "Use an online softmax so x is read twice instead of three times. For each row tile keep "
+    "m = np.full(i1 - i0, -np.inf) and s = np.zeros(i1 - i0, dtype=np.float64). In the FIRST pass "
+    "over the columns j do: col = x[i0:i1, j].astype(np.float64); m_new = np.maximum(m, col); "
+    "s = s * np.exp(m - m_new) + np.exp(col - m_new); m = m_new. In the SECOND pass write "
+    "out[i0:i1, j] = np.exp(x[i0:i1, j].astype(np.float64) - m) / s. Delete the separate max pass.")
 
 
 def better(new, old):
@@ -55,29 +59,68 @@ def better(new, old):
     return faster or leaner
 
 
+def _case(level, name):
+    return next(c for c in level.get_cases() if c.name == name)
+
+
+def read_floor(level, m):
+    """The fewest input reads the tile rules allow. A row-wise normalisation needs the whole row's
+    statistic before it can write, and a row wider than one tile cannot be held, so x is read twice;
+    a tiled matmul re-reads a once per output column tile and b once per output row tile."""
+    args = _case(level, m["case"]).args
+    if level.name in ROW_NORM:
+        return 1.0 if args[0].shape[1] <= TILE_C else 2.0
+    if level.name == "matmul":
+        a, b = args
+        n_tiles, m_tiles = -(-b.shape[1] // TILE_C), -(-a.shape[0] // TILE_R)
+        return (a.nbytes * n_tiles + b.nbytes * m_tiles) / (a.nbytes + b.nbytes)
+    if level.name in ("band_attention", "conv1d"):
+        return m["reads_x"]          # no closed form here: do not ask for the impossible
+    return 1.0
+
+
 def directives(level, m):
-    """Optimisation directives, worst excess first."""
+    """Diagnosed inefficiencies, most costly first, each with the code to write."""
     out = []
-    if m["reads_x"] > 1 + IMPROVE:
-        out.append(("reads", m["reads_x"],
-                    f"It loads each input element {m['reads_x']:.2f} times from HBM; the minimum is "
-                    f"1.00. Cut the number of passes over the input. "
-                    + READ_HINT.get(level.name, "Fuse passes that read the same tiles, and keep "
-                                                "values you need instead of reloading them.")))
-    if m["flops_x"] is not None and m["flops_x"] > 1 + IMPROVE:
-        out.append(("flops", m["flops_x"],
-                    f"It performs {m['flops_x']:.2f}x the minimal FLOPs: some values are computed "
-                    f"more than once (for example exp in two passes, or a product recomputed per "
-                    f"column). Compute each value once and reuse it."))
-    if m["elems_per_op"] < TILE / 32:
-        out.append(("ops", TILE / max(m["elems_per_op"], 1),
-                    f"It issues {m['ops']} instructions averaging {m['elems_per_op']:.0f} elements, "
-                    f"while one tile holds {TILE}. Operate on whole column slices such as "
-                    f"x[i0:i1, j] instead of single elements, and on whole tiles x[i0:i1, j0:j1] "
-                    f"where the work is elementwise on same-shape arrays. Keep reductions as "
-                    f"explicit loops over columns."))
-    order = {"reads": 0, "flops": 1, "ops": 2}   # memory bound: traffic first
-    return sorted(out, key=lambda d: order[d[0]])
+    if m["elems_per_op"] < 4:
+        head = (f"It issues {m['ops']} instructions of about {m['elems_per_op']:.0f} element each: "
+                f"it loops over single elements x[r, c]. Work on column vectors instead: ")
+        if level.name in ROW_REDUCE:
+            init, step = ROW_REDUCE[level.name]
+            out.append(("per-element", head +
+                        f"for each row tile i0:i1 start `{init}`, then for each column j do "
+                        f"`{step}` (one instruction for that column of the whole tile), and after "
+                        f"the column loop write `out[i0:i1] = acc`. " + NO_REDUCTIONS))
+        elif level.name in ROW_NORM:
+            out.append(("per-element", head +
+                        "keep each per-row statistic as a vector of length i1 - i0 and update it "
+                        "with whole columns, e.g. `col = x[i0:i1, j].astype(np.float64)`, then "
+                        "write the output one column at a time, e.g. "
+                        "`out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]`. " + NO_REDUCTIONS))
+        elif level.name == "relu_affine":
+            out.append(("per-element", head +
+                        "apply it to the whole tile at once: "
+                        "`out[i0:i1, j0:j1] = np.maximum(x[i0:i1, j0:j1] * a + b, 0.0)`."))
+        else:
+            out.append(("per-element", head + "operate on whole column slices x[i0:i1, j] and "
+                                              "whole tiles where the work is elementwise. "
+                        + NO_REDUCTIONS))
+    floor = read_floor(level, m)
+    if m["reads_x"] > floor * (1 + IMPROVE):
+        hint = (ONLINE_SOFTMAX if level.name == "softmax" else
+                "Fuse the passes that read the same tiles, and keep values you already hold "
+                "instead of reloading them.")
+        out.append(("reads", f"It loads each input element {m['reads_x']:.2f} times from HBM; "
+                             f"{floor:.2f} is possible under the tile rules. " + hint))
+    if (m["flops_x"] is not None and m["flops_x"] > 1 + IMPROVE and level.name != "softmax"):
+        # softmax: the online form trades FLOPs for a pass over x, which is the win
+        out.append(("flops", f"It performs {m['flops_x']:.2f}x the minimal FLOPs: some values are "
+                             f"computed more than once. Compute each value once and reuse it."))
+    if level.name == "relu_affine" and m["elems_per_op"] >= 4 and m["elems_per_op"] < TILE / 32:
+        out.append(("ops", f"It issues {m['ops']} instructions of about {m['elems_per_op']:.0f} "
+                           f"elements; one tile holds {TILE}. Apply the elementwise work to whole "
+                           f"tiles: `out[i0:i1, j0:j1] = np.maximum(x[i0:i1, j0:j1] * a + b, 0.0)`."))
+    return out
 
 
 def opt_prompt(level, code, m, text):
@@ -85,9 +128,8 @@ def opt_prompt(level, code, m, text):
                      f"{level.task} Tiles are at most {TILE_R} rows x {TILE_C} columns."),
             ("code", f"```python\n{code}```"),
             ("feedback", f"Efficiency on the largest test ({m['case']}): {text}"),
-            ("task", "Rewrite it to be cheaper. Keep the same rules (explicit tile loops, no "
-                     "whole-array numpy reductions, no fancy indexing, operands of the same shape). "
-                     "Reply with the complete function in one ```python code block.")]
+            ("task", "Rewrite it to be cheaper; you may restructure the loops as needed. Reply with the complete "
+                     "function in one ```python code block.")]
 
 
 @dataclass
@@ -119,7 +161,7 @@ def optimise(level, code, model, rounds, source, log, say=print):
         if not todo:
             say("   nothing left to optimise" if not tried else "   every direction tried")
             break
-        target, _, text = todo[0]
+        target, text = todo[0]
         parts = opt_prompt(level, best, m, text)
         account(model, parts)
         r = model.complete(render(parts), f"opt:{source}:{rnd}")
