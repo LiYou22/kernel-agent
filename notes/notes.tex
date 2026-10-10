@@ -850,6 +850,33 @@ remaining obstacle is a \emph{rule}, not the numerical algorithm. If the E26 tim
 after 17:30, it is this one, because it targets the blocker the logs show: give the row-norm column form
 for \code{whole-array} violations too (instead of the ``must keep'' list or prompt-varied sampling).
 
+\entry{E29: judged by the organizers' checker}{2026-10-10}
+Every verified kernel from every run went through the organizers' \code{kernelbench.py} (their
+signatures, references, cases, per-element relative tolerance $10^{-4}$, rule scan). L1, L2, L3: every
+verified kernel passes 32/32; L6: the naive verified kernel passes. \textbf{L4: 0/32}: their signature is
+\code{kernel(x, eps=1e-6)}, ours was \code{kernel(x, g, eps)} (L8 likewise, \code{kernel(x, eps=1e-5)} vs
+ours \code{(x, g, b, eps)}), so every call raised. L7: all seven dev-only kernels 4/10 and even our hand
+matmul 5/10: float32 \emph{products} leave relative errors of $5$--$8\times10^{-4}$ on outputs that happen to
+be near zero. L10: the four naive verified kernels 3/4 ($1.05\times10^{-4}$). Our proven float32 bound
+is principled but more permissive than the organizers' tolerance, which in effect demands float64
+products and sums; a teammate's differential script (\code{scripts/differential.py}) found 36/41 kernels
+agree. \textbf{Under the organizers' checker we reliably clear L1, L2, L3, L6.}
+
+\textbf{Response, v4} (branch \code{v4}, \code{174153fd32}): L4 and L8 use the organizers' signatures and
+references; a kernel is reported verified only if \code{kernelbench.py} (loaded from the seat pod) also
+passes it, and its failures become one directive (``callable as \code{kernel(x, eps=1e-6)}'', ``compute in
+float64'', \dots); the hand matmul multiplies in float64. A first attempt at emulating the organizers'
+tolerance inside our harness failed 10 tests: their references differ per level (L1 is computed in
+float32), so the only faithful emulation is their checker itself.
+
+\entry{E30: v3 verdict under the pre-registered rule (E26)}{2026-10-10}
+v3 (\code{29fd8d90d5}) finished 3 runs on L4--L6: L4 stuck, failed, \checkmark\ (10 attempts) = 1/3; L5 0/3;
+L6 stuck, \checkmark\ (2), \checkmark\ (2) = 2/3. \textbf{Total 3/9}, against v2's 1/25 on the same levels
+(seat-130 and seat-133). The rule set in advance was ``better if $\ge 2/9$'', so \textbf{v3 is adopted}.
+Caveats, stated with the result: the sample is small, most of the gain is L6, and the six changes were
+introduced together, so the gain cannot be attributed to one of them. v4 = v3 + alignment with the
+organizers' checker, and is the final agent.
+
 %==============================================================================
 \section{v2 and v3, side by side}
 \label{sec:v2v3}

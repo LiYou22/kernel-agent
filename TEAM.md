@@ -14,7 +14,7 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 15:40 EDT)
+## Status and open items (updated 16:20 EDT)
 
 **Done (v2, `e22ccab872`)**: `ours` L1–4 15/20 vs `naive` L1–4 4/20 (seat-130); `ours` L5–7 0/5 on
 both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-correct).
@@ -22,26 +22,29 @@ both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-c
 
 **Benchmark slices still unclaimed, reassigned** (seat-130 took `naive` L1–4 and `ours` L5–7):
 
-| seat | slice to run now | command |
-|---|---|---|
-| **134 (Erfu)** | **`ours` v3 on L8–10** (5 runs, 12 attempts) | see below |
-| 132 | (optional) `naive` L5–7 on v2: low value, ours is 0/5 there | `scripts/launch.sh naive 5 6 7` on `main` |
+| seat | slice to run now (agent **v4**, branch `v4`, version `174153fd32`) |
+|---|---|
+| 130 | `ours` L4, L7 (3 runs) — running since 16:15 |
+| 134 / 245 / 246 (Erfu) | **stop anything on L8 that used v2/v3** (the L8 signature changed); run `ours` v4 on L8, L9, L10, and if a pod is free L5, L6 |
 
-**seat-134 (Erfu), v3 on L8–10** (from a clean checkout of this repo; if your seat is not 134, change `POD`;
-if the pod is still running upstream-nki experiments, both will slow down, since one model server serves both):
+**Why v4** (notes E29): under the organizers' `kernelbench.py`, L4 failed 0/32 because their signature
+is `kernel(x, eps=1e-6)` (ours had `g`), L8 likewise (`kernel(x, eps=1e-5)`), and L7/L10 kernels failed
+on float32 products. v4 uses their signatures and adds their checker as the final gate (loaded from
+`/workspace/projects/02-kernel-agent/kernelbench.py` on the pod; the log of a verified kernel says
+`organizers' checker: n/n cases`). v3 was adopted under the pre-registered rule (3/9 vs v2's 1/25, E30).
 
 ```bash
-git fetch origin && git switch v3 && git pull
-export POD=seat-134
+git fetch origin && git switch v4 && git pull
+export POD=seat-134            # or 245 / 246
 scripts/sync.sh
-kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 64 passed
-scripts/launch.sh ours 8 9 10
-kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-134.log'      # must show v29fd8d90d5 (latest v3)
+kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 65 passed
+kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -c "from kagent import judge; print(judge.available())"'   # True
+REPEAT=3 scripts/launch.sh ours 8 9 10
+kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-$POD.log'   # must show v174153fd32
 git switch main
 ```
 
-When it finishes (about 1.5–2 h): `git switch -c results-seat134-L8910 origin/main`, `scripts/fetch.sh`,
-commit `results/seat-134/ours-L8910-seat-134.*`, open a PR. Seat-130 is running v3 on L4–L6 (5 runs).
+When done: branch from `origin/main`, `scripts/fetch.sh`, commit `results/$POD/...`, open a PR.
 
 **Deliverables** (from the challenge):
 
