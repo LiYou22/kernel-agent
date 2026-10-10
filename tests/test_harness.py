@@ -189,3 +189,12 @@ def test_layernorm_down_the_columns_is_named():
     from kagent.translate import translate
     d = translate(run(8, "broken/l8_live_column_stats.py"))
     assert d.key == "numeric:wrong-axis" and "normalises each ROW" in d.instruction, d.instruction
+
+
+def test_column_slice_longer_than_a_tile_is_a_violation():
+    # red team on live v3-rewrite L9: k[lo:hi+1, c] read 259 rows and x[:, j] read 131 rows, 0 violations
+    from kagent.harness import verify
+    probe = ("import numpy as np\n\ndef kernel(x):\n    M, N = x.shape\n    out = np.zeros(M, dtype=np.float32)\n"
+             "    for j in range(N):\n        out += x[:, j]\n    return out\n")
+    rep = verify(LEVELS[2], probe)
+    assert not rep.passed and any(v.kind == "whole-array" and "column slice" in v.what for v in rep.violations), rep.text()
