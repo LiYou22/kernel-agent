@@ -209,6 +209,20 @@ def rewrite_directive(rep):
         f"{len(rep.violations)} rule violations of {len(kinds)} kinds.")
 
 
+# After a rewrite the draft is close (live L9 run 1 attempt 4: 9/9 cases right, 2 violations), but the
+# generic fixes talk about x[i0:i1, j0:j1] tiles, which a band-attention kernel does not have; the
+# model kept `np.dot(q_slice, k_window[t])` on a (257, d) window. For an op with a skeleton, a
+# structural rule fix names the skeleton line that replaces the banned one.
+SKELETON_LINE = {
+    "band_attention": (
+        "In band attention the only legal way to form the scores is one feature column at a time "
+        "over a chunk of at most 128 keys: for c0 in range(0, n, 128): c1 = min(c0 + 128, n); for c "
+        "in range(d): s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]. No np.dot, no slice of k with "
+        "more than 128 rows, no per-key dot product."),
+}
+SKELETON_KINDS = {"whole-array", "linalg", "broadcast", "sum-like", "layout", "newaxis"}
+
+
 def _crash_line(msg):
     m = re.search(r" at line (\d+)", msg)
     return int(m.group(1)) if m else None
@@ -267,9 +281,12 @@ def translate(rep):
         where = ", ".join(f"line {v.line} `{v.source_line}`" for v in vs if v.line)
         rest = len(rep.violations) - len(vs)
         later = f" ({rest} other rule problem(s) will be handled after this one.)" if rest else ""
-        fix = (rownorm_fix(rep.level.name)
-               if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN
-               else vs[0].fix())
+        if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN:
+            fix = rownorm_fix(rep.level.name)
+        elif kind in SKELETON_KINDS and rep.level.name in SKELETON_LINE:
+            fix = vs[0].fix() + " " + SKELETON_LINE[rep.level.name]
+        else:
+            fix = vs[0].fix()
         return Directive(f"rule:{kind}", fix + later, f"Rule broken at {where}." if where else "")
 
     return _numeric(rep)

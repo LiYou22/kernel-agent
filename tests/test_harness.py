@@ -173,3 +173,12 @@ def test_few_violations_are_still_repaired_one_at_a_time():
     from kagent.translate import translate
     d = translate(run(2, "broken/l2_np_sum.py"))
     assert d.key == "rule:sum-like"
+
+
+def test_near_miss_after_rewrite_gets_the_skeleton_line():
+    # live v3-rewrite L9: right numbers, but np.dot over a (257, d) window; name the legal score line
+    from kagent.translate import translate, REWRITE_AT
+    rep = run(9, "broken/l9_live_after_rewrite.py")
+    assert 0 < len(rep.violations) < REWRITE_AT
+    d = translate(rep)
+    assert d.key.startswith("rule:") and "s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]" in d.instruction, d.instruction
