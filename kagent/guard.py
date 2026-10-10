@@ -70,6 +70,23 @@ def _oversize(shape):
     return rows > TILE_R or shape[-1] > TILE_C
 
 
+_IN_SETITEM = [0]  # numpy re-enters __getitem__ while assigning; that read is the write target
+
+
+def _column_rows(arr_ndim, key, result_shape):
+    """Rows spanned by a column slice: x[a:b, j] on a 2-D array is a 1-D result running down the ROW
+    axis, so it is bounded by the 128-row tile, not by the 512-column one that _oversize applies to a
+    1-D shape. Red-team finding on live v3-rewrite L9: k[lo:hi+1, c] read 259 rows with 0 violations,
+    and x[:, j] over 131 rows passed L2. Applied to reads only: a transpose legally writes a 128x512
+    input tile as a 512x128 output region (hand L6 writes out[j0:j1, i])."""
+    if arr_ndim != 2 or len(result_shape) != 1:
+        return 0
+    k = key if isinstance(key, tuple) else (key,)
+    if len(k) == 2 and isinstance(k[1], (int, _np.integer)) and not isinstance(k[1], bool):
+        return result_shape[0]
+    return 0
+
+
 def _check_key(key):
     rec = _rec()
     if rec is None:
@@ -109,6 +126,11 @@ class TArray(_np.ndarray):
     def __getitem__(self, key):
         _check_key(key)
         res = super().__getitem__(key)
+        rec = _rec()
+        if rec is not None and not _IN_SETITEM[0] and isinstance(res, _np.ndarray):
+            n = _column_rows(self.ndim, key, res.shape)
+            if n > TILE_R:
+                rec.add("whole-array", f"a column slice of {n} rows, more than one {TILE_R}-row tile")
         r = _REC
         if r is not None and not r._quiet and self.__dict__.get("_hbm"):
             r.hbm_read += res.nbytes if isinstance(res, _np.ndarray) else self.itemsize
@@ -128,7 +150,11 @@ class TArray(_np.ndarray):
             squeeze = lambda s: tuple(d for d in s if d != 1)
             if vshape != () and squeeze(vshape) != squeeze(tshape):
                 rec.add("broadcast", f"assigning shape {vshape} into a region of shape {tshape}")
-        super().__setitem__(key, value)
+        _IN_SETITEM[0] += 1
+        try:
+            super().__setitem__(key, value)
+        finally:
+            _IN_SETITEM[0] -= 1
 
     def __array_ufunc__(self, ufunc, method, *inputs, out=None, **kwargs):
         rec = _rec()

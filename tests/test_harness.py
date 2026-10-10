@@ -132,7 +132,9 @@ def test_numpy_alias_on_an_unreached_branch_is_caught():
     assert not rep.passed and any(v.kind == "max-like" for v in rep.violations), rep.text()
 
 
-@pytest.mark.parametrize("path,key", [("l4_live_broadcast_crash.py", "crash:ValueError"),
+# the broadcast crash is raised on the banned line itself, so it now comes back as the rule (whose fix
+# is the same column loop) rather than as a crash
+@pytest.mark.parametrize("path,key", [("l4_live_broadcast_crash.py", "rule:broadcast"),
                                       ("l4_live_reshape.py", "rule:layout")])
 def test_rownorm_broadcast_gets_the_column_loop(path, key):
     # v2 L4: 13 of 37 failures cycled between a broadcast crash and a .reshape violation, and the
@@ -140,3 +142,59 @@ def test_rownorm_broadcast_gets_the_column_loop(path, key):
     from kagent.translate import translate
     d = translate(run(4, "broken/" + path))
     assert d.key == key and "out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]" in d.instruction, d.instruction
+
+
+@pytest.mark.parametrize("lv,path", [(8, "l8_live_whole_array.py"), (9, "l9_live_dot_crash.py")])
+def test_many_violations_get_a_rewrite_in_the_legal_loop_shape(lv, path):
+    # live L8/L9 drafts break 5-15 rules at once; one directive per kind never finished in budget
+    from kagent.translate import translate, REWRITE_AT
+    rep = run(lv, "broken/" + path)
+    assert len(rep.violations) >= REWRITE_AT
+    d = translate(rep)
+    assert d.key == "rule:rewrite" and d.structural, d.instruction
+    assert ("rinv" in d.instruction) if lv == 8 else ("lo + t" in d.instruction)
+
+
+def test_crash_on_a_banned_line_is_reported_as_the_rule():
+    # live v2 L9 run 1: `np.dot(...)` raised a shape error; v2 asked to fix the crash three times
+    from kagent.translate import translate, _crash_line
+    import kagent.translate as t
+    rep = run(9, "broken/l9_live_dot_crash.py")
+    crash = next(r for r in rep.results if r.status == "error")
+    assert _crash_line(crash.msg) in {v.line for v in rep.violations}
+    old, t.REWRITE_AT = t.REWRITE_AT, 99  # isolate this rule from the rewrite threshold
+    try:
+        assert translate(rep).key.startswith("rule:")
+    finally:
+        t.REWRITE_AT = old
+
+
+def test_few_violations_are_still_repaired_one_at_a_time():
+    from kagent.translate import translate
+    d = translate(run(2, "broken/l2_np_sum.py"))
+    assert d.key == "rule:sum-like"
+
+
+def test_near_miss_after_rewrite_gets_the_skeleton_line():
+    # live v3-rewrite L9: right numbers, but np.dot over a (257, d) window; name the legal score line
+    from kagent.translate import translate, REWRITE_AT
+    rep = run(9, "broken/l9_live_after_rewrite.py")
+    assert 0 < len(rep.violations) < REWRITE_AT
+    d = translate(rep)
+    assert d.key.startswith("rule:") and "s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]" in d.instruction, d.instruction
+
+
+def test_layernorm_down_the_columns_is_named():
+    # live v3 L8: rule-clean, every output wrong, translator could only say numeric:other (15x)
+    from kagent.translate import translate
+    d = translate(run(8, "broken/l8_live_column_stats.py"))
+    assert d.key == "numeric:wrong-axis" and "normalises each ROW" in d.instruction, d.instruction
+
+
+def test_column_slice_longer_than_a_tile_is_a_violation():
+    # red team on live v3-rewrite L9: k[lo:hi+1, c] read 259 rows and x[:, j] read 131 rows, 0 violations
+    from kagent.harness import verify
+    probe = ("import numpy as np\n\ndef kernel(x):\n    M, N = x.shape\n    out = np.zeros(M, dtype=np.float32)\n"
+             "    for j in range(N):\n        out += x[:, j]\n    return out\n")
+    rep = verify(LEVELS[2], probe)
+    assert not rep.passed and any(v.kind == "whole-array" and "column slice" in v.what for v in rep.violations), rep.text()
