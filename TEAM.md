@@ -53,11 +53,16 @@ scripts/launch.sh naive 5 6 7       # seat-134
 # 4. watch progress
 kubectl exec $POD -c app -- bash -c 'tail -n 20 /workspace/stageA/runs/*.log'
 
-# 5. when done, fetch results and commit them (results/ is tracked in git)
-scripts/fetch.sh && git add results/$POD && git commit -m "results: $POD" && git push
+# 5. when done, fetch results and open a PR (results/ is tracked in git)
+git switch -c results-$POD
+scripts/fetch.sh && git add results/$POD && git commit -m "results: $POD"
+git push -u origin results-$POD && gh pr create --fill
 ```
 
 Notes:
+- **`main` is protected: every change goes through a pull request** (branch, push, `gh pr create`).
+  Direct pushes and force pushes to `main` are rejected. Keep PRs small: one result set or one
+  red-team kernel per PR, so they merge without conflicts.
 - **Never send `seed` in a request**: the Neuron build of vLLM crashes (notes E5).
 - Do not run two benchmarks on one pod at once; the model server serves at most 4 requests
   concurrently and they slow each other down.
@@ -86,7 +91,7 @@ From the challenge: "if the harness can't catch your own deliberate bug, it will
   violations the checks miss, errors that hide inside the bound, ...).
 - **False fails**: write correct kernels that get rejected or flagged (unusual but legal code).
 - For each finding: `kernels/redteam/l<N>_<name>.py` with a one-line comment at the top saying
-  what it shows; push and tell 130.
+  what it shows; open a PR and tell 130.
 - Check locally: `uv run python -m kagent.harness <N> kernels/redteam/<file>.py -v --fixes`.
 
 ### seat-134: write-up & demo
