@@ -14,11 +14,11 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 15:25 EDT)
+## Status and open items (updated 15:40 EDT)
 
 **Done (v2, `e22ccab872`)**: `ours` L1–4 15/20 vs `naive` L1–4 4/20 (seat-130); `ours` L5–7 0/5 on
 both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-correct).
-**Running**: v3 (`eddb241adf`) `ours` L4–L6 on seat-130 since 15:07 (5 runs, 12 attempts).
+**Running**: v3 (`29fd8d90d5`) `ours` L4–L6 on seat-130 since 15:35 (3 runs, 12 attempts). v3 changed at 15:30 (row-norm broadcast/layout errors now get the per-column loop); **anything started on an earlier v3 (`eddb241adf`) must be restarted after `git pull` on branch v3.**
 
 **Benchmark slices still unclaimed, reassigned** (seat-130 took `naive` L1–4 and `ours` L5–7):
 
@@ -34,9 +34,9 @@ if the pod is still running upstream-nki experiments, both will slow down, since
 git fetch origin && git switch v3 && git pull
 export POD=seat-134
 scripts/sync.sh
-kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 62 passed
+kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 64 passed
 scripts/launch.sh ours 8 9 10
-kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-134.log'      # must show veddb241adf
+kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-134.log'      # must show v29fd8d90d5 (latest v3)
 git switch main
 ```
 
