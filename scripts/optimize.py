@@ -25,7 +25,7 @@ from kagent.extract import extract_code  # noqa: E402
 from kagent.harness import verify  # noqa: E402
 from kagent.levels import LEVELS  # noqa: E402
 from kagent.rules import TILE_C, TILE_R  # noqa: E402
-from roofline import metrics  # noqa: E402  (scripts/ is on sys.path when run as a script)
+from roofline import measure  # noqa: E402  (scripts/ is on sys.path when run as a script)
 
 TILE = TILE_R * TILE_C
 # accept a rewrite only if roofline time (scripts/roofline.py) drops by IMPROVE; these ops are
@@ -48,8 +48,11 @@ READ_HINT = {
 
 
 def better(new, old):
-    return (new["time_x"] <= old["time_x"] * (1 - IMPROVE)
-            and new["ops"] <= old["ops"] * MAX_OPS_GROWTH)
+    """Roofline time down by IMPROVE (instructions may grow, within reason), or time unchanged and
+    instructions down by IMPROVE (per-element loops -> column vectors)."""
+    faster = new["time_x"] <= old["time_x"] * (1 - IMPROVE) and new["ops"] <= old["ops"] * MAX_OPS_GROWTH
+    leaner = new["time_x"] <= old["time_x"] * 1.01 and new["ops"] <= old["ops"] * (1 - IMPROVE)
+    return faster or leaner
 
 
 def directives(level, m):
@@ -69,9 +72,10 @@ def directives(level, m):
     if m["elems_per_op"] < TILE / 32:
         out.append(("ops", TILE / max(m["elems_per_op"], 1),
                     f"It issues {m['ops']} instructions averaging {m['elems_per_op']:.0f} elements, "
-                    f"while one tile holds {TILE}. Wherever an operation is elementwise on arrays "
-                    f"of the same shape, apply it to the whole tile x[i0:i1, j0:j1] in one "
-                    f"instruction instead of column by column."))
+                    f"while one tile holds {TILE}. Operate on whole column slices such as "
+                    f"x[i0:i1, j] instead of single elements, and on whole tiles x[i0:i1, j0:j1] "
+                    f"where the work is elementwise on same-shape arrays. Keep reductions as "
+                    f"explicit loops over columns."))
     order = {"reads": 0, "flops": 1, "ops": 2}   # memory bound: traffic first
     return sorted(out, key=lambda d: order[d[0]])
 
@@ -102,11 +106,10 @@ class Step:
 
 
 def optimise(level, code, model, rounds, source, log, say=print):
-    rep = verify(level, code)
-    if not rep.passed:
+    if not verify(level, code).passed:
         say(f"L{level.num} {source}: input kernel does not pass; skipped")
         return None
-    best, m = code, metrics(rep)
+    best, m = code, measure(level, code)
     first = dict(m)
     say(f"L{level.num} {source}: start  time {m['time_x']:.2f}x min  reads {m['reads_x']:.2f}x  "
         f"flops {(m['flops_x'] or 0):.2f}x  intensity {m['intensity']:.2f} FLOP/B  ops {m['ops']}")
@@ -131,7 +134,7 @@ def optimise(level, code, model, rounds, source, log, say=print):
             elif not verify(level, new, holdout=True).passed:
                 outcome = "holdout-fail"
             else:
-                after = metrics(nrep)
+                after = measure(level, new)
                 outcome = "accepted" if better(after, m) else "not-cheaper"
         log.write(json.dumps(asdict(Step(level.num, source, rnd, target, outcome, m, after,
                                          r.prompt_tokens, r.completion_tokens, r.latency_s,

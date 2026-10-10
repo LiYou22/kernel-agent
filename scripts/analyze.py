@@ -56,14 +56,13 @@ def summarise(arms):
 
 def efficiency(arms):
     """Roofline metrics of every verified kernel, re-measured from its code (dev, largest case)."""
-    from kagent.harness import verify
     from kagent.levels import LEVELS
-    from roofline import metrics
+    from roofline import measure
     rows = []
     for label, (_, res) in arms.items():
         for r in res:
             if r["status"] == "verified" and r.get("code"):
-                m = metrics(verify(LEVELS[r["level"]], r["code"]))
+                m = measure(LEVELS[r["level"]], r["code"])
                 rows.append(dict(arm=label, level=r["level"], run=r["run"], **m))
     return rows
 
