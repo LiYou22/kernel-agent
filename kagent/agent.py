@@ -195,6 +195,12 @@ def _rank(rep):
     return (rep.passed, rep.load_error is None, -crashes, rep.n_pass, -len(rep.violations))
 
 
+def _progress(rep):
+    """How far a failing kernel got: fewer crashes, more cases right, fewer rule violations."""
+    crashes = sum(r.status in ("error", "timeout") for r in rep.results)
+    return (rep.load_error is None, -crashes, rep.n_pass, -len(rep.violations))
+
+
 def _code_hash(code):
     return hashlib.sha1(code.encode()).hexdigest()[:10]
 
@@ -208,6 +214,7 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
     history = []        # (instruction given, failure key it produced)
     seen_hashes = set()
     keys, streak = [], 0
+    last_progress = None
     tin = tout = 0
 
     for att in range(1, max_attempts + 1):
@@ -271,7 +278,17 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
         if history:
             history[-1] = (history[-1][0], directive.key)
         history.append((directive.short(), None))
-        streak = streak + 1 if keys and keys[-1] == directive.key else 1
+        # Same failure class again counts toward "stuck" only when nothing improved. Live v3 L9 run 1
+        # went 13 -> 12 -> 10 -> 6 -> 5 violations and L8 runs stopped at 3 repeats of a class while
+        # the count was still falling; a repeated class with a falling count is progress, not a loop.
+        # Identical code is never progress. Same rule for both arms.
+        prog = _progress(rep)
+        improved = (last_progress is not None and prog > last_progress and not repeat_code)
+        if keys and keys[-1] == directive.key:
+            streak = streak if improved else streak + 1
+        else:
+            streak = 1
+        last_progress = prog
         keys.append(directive.key)
         code = src
         _log(log, Attempt(**base, outcome="fail", key=directive.key,
@@ -282,7 +299,7 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
         if streak >= patience:
             res = Result(level.num, run, "stuck", 0.0, att, tin, tout, directive.key, "", code, keys,
                          mode, wording)
-            say(f"   STUCK: '{directive.key}' {streak} attempts in a row; more of the same won't help")
+            say(f"   STUCK: '{directive.key}' {streak} attempts in a row without progress; more of the same won't help")
             _log(log, res)
             return res
 

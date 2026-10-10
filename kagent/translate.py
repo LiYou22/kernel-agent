@@ -166,6 +166,54 @@ def crash_fix(msg, level_name=None):
     return None
 
 
+# A first draft written as whole-array numpy breaks many rules at once (live L8: 5-15 violations per
+# attempt, L9: 5-13). One directive per kind with "N other problems will be handled later" cannot
+# converge in the attempt budget, and each local fix tends to break something else (E13). Past this
+# many violations the kernel is not a near miss, so ask for a rewrite in the one legal loop shape
+# for the op: the structure of the loops and the per-column lines, never the reference's formula.
+REWRITE_AT = 5
+
+SKELETON = {
+    "layernorm": (
+        "for each row tile i0..i1 (128 rows): "
+        "pass 1, s = np.zeros(i1 - i0, dtype=np.float64), then for every column tile j0..j1 and "
+        "every j in it: s += x[i0:i1, j]; mu = s / N. "
+        "Pass 2, the same loops: d = x[i0:i1, j] - mu; ss += d * d; rinv = 1.0 / np.sqrt(ss / N + eps). "
+        "Pass 3, the same loops: out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv * g[j] + b[j]. "
+        "Every statistic covers the whole row (all column tiles) before it is used; every operand is a "
+        "column vector of length i1 - i0 or a scalar."),
+    "band_attention": (
+        "for each query row i: lo, hi = max(0, i - w), min(S - 1, i + w); n = hi - lo + 1. "
+        "Scores: s = np.zeros(n, dtype=np.float64); for each chunk c0..c1 of at most 128 keys and "
+        "each feature c in range(d): s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]. "
+        "Row max with a scalar loop: m = -np.inf; for t in range(n): m = max(m, s[t]). "
+        "p[c0:c1] = np.exp((s[c0:c1] - m) / np.sqrt(d)) per chunk. "
+        "Output: total = 0.0; acc = np.zeros(d, dtype=np.float64); for t in range(n): total += p[t]; "
+        "acc += p[t] * v[lo + t, :]; then out[i, :] = acc / total. "
+        "No np.dot, @, einsum, masks or full S x S score matrix: only keys inside the band are touched."),
+}
+
+
+def rewrite_directive(rep):
+    """A whole-kernel rewrite in the op's legal loop shape, or None (op without a skeleton, or a
+    near miss with few violations)."""
+    if len(rep.violations) < REWRITE_AT or rep.level.name not in SKELETON:
+        return None
+    kinds = sorted({v.kind for v in rep.violations})
+    return Directive(
+        "rule:rewrite",
+        f"This draft computes the whole operation with array operations the rules ban "
+        f"({len(rep.violations)} violations: {', '.join(kinds)}), so patching it one line at a time "
+        f"will not finish. Rewrite the function body from scratch in this loop shape, keeping the "
+        f"signature: {SKELETON[rep.level.name]}",
+        f"{len(rep.violations)} rule violations of {len(kinds)} kinds.")
+
+
+def _crash_line(msg):
+    m = re.search(r" at line (\d+)", msg)
+    return int(m.group(1)) if m else None
+
+
 def translate(rep):
     if rep.load_error:
         kinds = {v.kind for v in rep.violations}
@@ -178,7 +226,16 @@ def translate(rep):
         return Directive("load-crash", f"The module fails when it is loaded: {rep.load_error}. "
                                        f"Fix that line.")
 
-    crashes = [r for r in rep.results if r.status in ("error", "timeout")]
+    rw = rewrite_directive(rep)
+    if rw:
+        return rw
+
+    # A crash raised by a call the rules ban (live L9: `np.dot(scores, v_window.T)` shape errors, 3
+    # attempts in a row on one run) is not worth fixing: the fix is to remove the call, which the
+    # rule directive says. Crashes on legal lines still come first.
+    banned_lines = {v.line for v in rep.violations if v.line}
+    crashes = [r for r in rep.results if r.status in ("error", "timeout")
+               and not (r.status == "error" and _crash_line(r.msg) in banned_lines)]
     if crashes:
         r = crashes[0]
         if r.status == "timeout":
