@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def kernel(x, g, eps):
+def kernel(x, eps=1e-6):
     M, N = x.shape
     out = np.empty((M, N), dtype=np.float32)
     for i0 in range(0, M, 128):
@@ -16,5 +16,5 @@ def kernel(x, g, eps):
         for j0 in range(0, N, 512):
             j1 = min(j0 + 512, N)
             for j in range(j0, j1):
-                out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]
+                out[i0:i1, j] = x[i0:i1, j] * rinv
     return out

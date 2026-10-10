@@ -273,29 +273,30 @@ L3 = Level(
 
 # ---- level 4: RMSNorm ---------------------------------------------------------------------------
 
-def _rmsnorm(x, g, eps):
-    return x / np.sqrt((x * x).mean(axis=1, keepdims=True) + eps) * g
+# v4 (E29): L4 and L8 follow the organizers' kernelbench.py exactly: kernel(x, eps=...) called as
+# kernel(x), no scale/shift vectors. Our earlier (x, g, eps) / (x, g, b, eps) made every verified
+# kernel a TypeError under the organizers' checker.
+RMS_EPS, LN_EPS = 1e-6, 1e-5
 
 
-def _l4_extra(x, rng, holdout):
-    g = rng.uniform(0.5, 1.5, x.shape[1]).astype(np.float32)
-    return [(" eps=1e-6", (g, 1e-6), ())]
+def _rmsnorm(x, eps=RMS_EPS):
+    return x / np.sqrt((x * x).mean(axis=1, keepdims=True) + eps)
 
 
 L4 = Level(
-    4, "rmsnorm", "kernel(x, g, eps)",
-    "Given a 2-D float32 array x of shape (M, N), a 1-D float32 array g of length N and a python "
-    "float eps, return the (M, N) array y[i, j] = x[i, j] / sqrt(mean(x[i, :]**2) + eps) * g[j] "
-    "(RMSNorm over the last axis).",
+    4, "rmsnorm", "kernel(x, eps=1e-6)",
+    "Given a 2-D float32 array x of shape (M, N), return the (M, N) array "
+    "y[i, j] = x[i, j] / sqrt(mean(x[i, :]**2) + eps) (RMSNorm over the last axis); eps is a "
+    "keyword argument with default 1e-6 and the kernel is called as kernel(x).",
     ref=_rmsnorm,
     # mean square: N squares + N-1 adds + divide; +eps, sqrt halves it; divide, multiply by g
     scale=lambda args, r: np.abs(r),
     bound_k=lambda args: args[0].shape[1] + 4,
     min_flops=lambda args: 4 * args[0].size,
     make_cases=lambda h: _cases_2d(["huge-magnitude", "large-mean", "constant-rows", "zeros"],
-                                   _l4_extra, seed=4, holdout=h),
+                                   seed=4, holdout=h),
     explain=lambda args, g, r, bad: rowwise_tile_facts(
-        lambda a, j0, j1: _rmsnorm(a[0][:, j0:j1], a[1][j0:j1], a[2]), args, g, bad),
+        lambda a, j0, j1: _rmsnorm(a[0][:, j0:j1]), args, g, bad),
 )
 
 # ---- level 5: softmax ---------------------------------------------------------------------------
@@ -400,20 +401,20 @@ L7 = Level(
 
 # ---- level 8: layernorm -------------------------------------------------------------------------
 
-def _layernorm(x, g, b, eps):
+def _layernorm(x, eps=LN_EPS):
     mu = x.mean(axis=1, keepdims=True)
     var = ((x - mu) ** 2).mean(axis=1, keepdims=True)
-    return (x - mu) / np.sqrt(var + eps) * g + b
+    return (x - mu) / np.sqrt(var + eps)
 
 
 def _ln_scale(args, r):
     # two-pass float32: the mean is off by up to gamma_N * mean|x|, which shifts every x - mu, so
     # the error relative to sigma grows with mean|x| / sigma (the conditioning of the problem)
-    x, g, b, eps = args
+    x = args[0]
     mu = x.mean(axis=1, keepdims=True)
-    sigma = np.sqrt(((x - mu) ** 2).mean(axis=1, keepdims=True) + eps)
+    sigma = np.sqrt(((x - mu) ** 2).mean(axis=1, keepdims=True) + LN_EPS)
     yn = (x - mu) / sigma
-    return np.abs(g) * (np.abs(yn) + np.abs(x).mean(axis=1, keepdims=True) / sigma) + np.abs(b)
+    return np.abs(yn) + np.abs(x).mean(axis=1, keepdims=True) / sigma
 
 
 def layernorm_facts(args, g, bad):
@@ -421,34 +422,27 @@ def layernorm_facts(args, g, bad):
     and constant rows); a per-row condition ratio names that without guessing at the code."""
     x = args[0]
     mu = x.mean(axis=1)
-    ratio = np.abs(x).mean(axis=1) / np.sqrt(((x - mu[:, None]) ** 2).mean(axis=1) + args[3])
+    ratio = np.abs(x).mean(axis=1) / np.sqrt(((x - mu[:, None]) ** 2).mean(axis=1) + LN_EPS)
     rows = bad.any(axis=1)
     if rows.any() and np.all(ratio[rows] >= 30):
         return ["only rows whose mean is large compared to their spread are wrong (cancellation)"]
     return []
 
 
-def _l8_extra(x, rng, holdout):
-    N = x.shape[1]
-    g = rng.uniform(0.5, 1.5, N).astype(np.float32)
-    b = rng.uniform(-0.5, 0.5, N).astype(np.float32)
-    return [(" eps=1e-5", (g, b, 1e-5), ())]
-
-
 L8 = Level(
-    8, "layernorm", "kernel(x, g, b, eps)",
-    "Given a 2-D float32 array x of shape (M, N), 1-D float32 arrays g and b of length N and a "
-    "python float eps, return the (M, N) layernorm over the last axis: "
-    "y[i, j] = (x[i, j] - mean_i) / sqrt(var_i + eps) * g[j] + b[j], where mean_i and var_i are "
-    "the mean and the (population) variance of row i.",
+    8, "layernorm", "kernel(x, eps=1e-5)",
+    "Given a 2-D float32 array x of shape (M, N), return the (M, N) layernorm over the last axis: "
+    "y[i, j] = (x[i, j] - mean_i) / sqrt(var_i + eps), where mean_i and var_i are the mean and the "
+    "(population) variance of row i; eps is a keyword argument with default 1e-5 and the kernel "
+    "is called as kernel(x).",
     ref=_layernorm,
     scale=_ln_scale,
     bound_k=lambda args: args[0].shape[1] + 6,
     min_flops=lambda args: 7 * args[0].size,
     make_cases=lambda h: _cases_2d(["large-mean", "constant-rows", "zeros", "large-magnitude"],
-                                   _l8_extra, seed=8, holdout=h),
+                                   seed=8, holdout=h),
     explain=lambda args, g, r, bad: layernorm_facts(args, g, bad) + rowwise_tile_facts(
-        lambda a, j0, j1: _layernorm(a[0][:, j0:j1], a[1][j0:j1], a[2][j0:j1], a[3]), args, g, bad),
+        lambda a, j0, j1: _layernorm(a[0][:, j0:j1]), args, g, bad),
 )
 
 # ---- level 9: banded (windowed) attention -------------------------------------------------------

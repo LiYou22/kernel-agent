@@ -8,6 +8,7 @@ the kernel must load, then run, then return the right shape, then obey the rules
 `key` is a coarse failure class. The loop uses it to notice repeats (the numbers in a message
 change every round; the class doesn't) and the taxonomy groups by it.
 """
+import re
 from dataclasses import dataclass
 
 from .harness import ROUNDING_CEILING, common_facts, fact_support, pattern_tag
@@ -49,9 +50,8 @@ TAG_MEANING = {
 # when the failures are exactly the cases with one tag, some tags have a known fix
 TAG_FIX = {
     "huge-magnitude": "Values around 1e18 overflow float32 when squared (float32 max is 3.4e38). "
-                      "Accumulate the squares in float64 (cast each column with "
-                      ".astype(np.float64) before squaring), or divide by the row's largest "
-                      "magnitude before squaring.",
+                      "Accumulate the squares in float64: cast each column with "
+                      ".astype(np.float64) before squaring it.",
     "partial-k-tile": "Results are wrong exactly when K is not a multiple of the K tile. Loop "
                       "`for k0 in range(0, K, step)` with `k1 = min(k0 + step, K)` so the last, "
                       "partial K tile is included, and use its real size k1 - k0.",
@@ -88,11 +88,23 @@ LEVEL_TAG_FIX = {
 }
 
 
+# E17: "change only that and keep everything else identical" blocks a fix that needs the loops
+# rebuilt (upstream NKI L4 sat on one error 72 of 80 attempts). Only these keys are local edits;
+# every other directive tells the model it may restructure.
+LOCAL_KEYS = {"rule:escape", "rule:import", "rule:builtin", "rule:keepdims", "rule:fancy-index",
+              "numeric:identity", "numeric:precision", "numeric:dilation", "syntax", "no-kernel",
+              "shape", "load-crash"}
+
+
 @dataclass
 class Directive:
     key: str            # failure class, e.g. "rule:sum-like", "numeric:partial-col"
     instruction: str    # the one change to make
     evidence: str = ""  # short distilled evidence shown with it
+
+    @property
+    def structural(self):
+        return self.key not in LOCAL_KEYS
 
     def short(self, n=110):
         s = self.instruction.split(". ")[0]
@@ -101,6 +113,81 @@ class Directive:
 
 def _first_sentence_of(msg):
     return msg.split(";")[0]
+
+
+# Row-wise normalisations scale a (rows, cols) tile by a per-row vector, which needs broadcasting,
+# which the rules ban. v2 L4: 13 of 37 failures were this (a broadcast crash, then .reshape to fix it,
+# a layout violation, then the crash again), and the generic layout fix showed a *transpose* loop.
+# The only legal form is one column at a time, with the per-row vector and a scalar per column.
+ROWNORM_COLUMN = {
+    "rmsnorm": "out[i0:i1, j] = x[i0:i1, j] * rinv",
+    "softmax": "out[i0:i1, j] = np.exp(x[i0:i1, j] - m) / s",
+    "layernorm": "out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv",
+}
+
+
+def rownorm_fix(level_name):
+    line = ROWNORM_COLUMN[level_name]
+    return (f"Do not reshape, add axes or broadcast: a (rows, cols) tile cannot be combined with a "
+            f"per-row vector. Write the output one column at a time, so every operand is a vector of "
+            f"length i1 - i0 or a scalar: for j in range(j0, j1): `{line}` (the per-row values are "
+            f"vectors of length i1 - i0, computed over the whole row first).")
+
+
+def crash_fix(msg, level_name=None):
+    """The fix for the crashes the model actually produces (live L2, L4, L5, L6, L10); None if the
+    message is not one we know."""
+    m = re.search(r"index (-?\d+) is out of bounds for axis (\d+) with size (\d+)", msg)
+    if m:
+        i, ax, size = m.groups()
+        return (f"Index {i} on axis {ax} is past the end of an array of size {size}. A partial tile "
+                f"is smaller than 128 rows / 512 columns. Inside a tile index the tile slice with "
+                f"local positions 0 .. end - start - 1, or index the full array with global positions "
+                f"start .. end - 1; never mix the two, and never assume a full-size tile.")
+    if level_name in ROWNORM_COLUMN and "broadcast" in msg:
+        return rownorm_fix(level_name)
+    m = re.search(r"could not broadcast input array from shape \(([^)]*)\) into shape \(([^)]*)\)", msg)
+    if m:
+        return (f"An assignment puts a value of shape ({m.group(1)}) into a slot of shape "
+                f"({m.group(2)}). The slice on the left and the value on the right must have the same "
+                f"shape; at a partial tile both must use the real size end - start.")
+    m = re.search(r"operands could not be broadcast together with shapes (.*?)(?: at line|$)", msg)
+    if m:
+        return (f"Two operands of one operation have different shapes ({m.group(1).strip()}). Combine "
+                f"only arrays of the same length, e.g. column vectors x[i0:i1, j] with accumulators of "
+                f"length i1 - i0; at a partial tile every length is end - start.")
+    if "setting an array element with a sequence" in msg:
+        return ("A whole array is assigned to a single element (e.g. out[r] = vector). Reduce it to one "
+                "value per row first, or assign it to a slice of the same length.")
+    if "negative dimensions are not allowed" in msg:
+        return ("A size computed for an allocation is negative: the range end is before its start. Check "
+                "the window or tile bounds so that start <= end, and handle an empty range without "
+                "allocating.")
+    return None
+
+
+def judge_directive(level, message):
+    """The organizers' checker failed a kernel our harness accepted: one instruction for why."""
+    first = message.splitlines()[0]
+    if "RAISED" in message and ("positional argument" in message or "TypeError" in message):
+        return Directive("judge:signature",
+                         f"The kernel must be callable exactly as `{level.signature}`, i.e. with the "
+                         f"input arrays only (keyword arguments keep their defaults). Use that "
+                         f"signature.", first)
+    if "NON-FINITE" in message:
+        return Directive("judge:nonfinite", "Some outputs are nan or inf on the final check: a step "
+                         "overflows. Subtract the row maximum before exp, and accumulate in float64.",
+                         first)
+    if "WRONG SHAPE" in message:
+        return Directive("judge:shape", f"Wrong output shape on the final check: {first}", first)
+    if "RULES" in message:
+        return Directive("judge:rules", f"The final check found a banned call: {first}. Replace it "
+                         f"with an explicit loop over columns.", first)
+    return Directive("judge:precision",
+                     "Correct logic, but the final check needs every output within 1e-4 relative "
+                     "error, including outputs close to zero. Compute in float64: cast each slice "
+                     "with .astype(np.float64) before multiplying or adding, keep accumulators in "
+                     "float64, and convert only the final result.", first)
 
 
 def translate(rep):
@@ -124,9 +211,12 @@ def translate(rep):
                                         f"on whole column slices; do not loop over single elements.")
         exc = r.msg.split(":")[0]
         names = ", ".join(f"'{c.case.name}'" for c in crashes[:3])
+        where = f"It crashes on {len(crashes)} of {len(rep.results)} cases, e.g. {names}"
+        fix = crash_fix(r.msg, rep.level.name)
+        if fix:
+            return Directive(f"crash:{exc}", fix, f"The kernel raises {r.msg}. {where}.")
         return Directive(f"crash:{exc}",
-                         f"The kernel raises {r.msg}. It crashes on {len(crashes)} of "
-                         f"{len(rep.results)} cases, e.g. {names}. Fix it so it works for every "
+                         f"The kernel raises {r.msg}. {where}. Fix it so it works for every "
                          f"shape, including dimensions of 1 and sizes that are not multiples of "
                          f"the tile size.")
 
@@ -144,7 +234,10 @@ def translate(rep):
         where = ", ".join(f"line {v.line} `{v.source_line}`" for v in vs if v.line)
         rest = len(rep.violations) - len(vs)
         later = f" ({rest} other rule problem(s) will be handled after this one.)" if rest else ""
-        return Directive(f"rule:{kind}", vs[0].fix() + later, f"Rule broken at {where}." if where else "")
+        fix = (rownorm_fix(rep.level.name)
+               if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN
+               else vs[0].fix())
+        return Directive(f"rule:{kind}", fix + later, f"Rule broken at {where}." if where else "")
 
     return _numeric(rep)
 
@@ -217,17 +310,22 @@ def _numeric(rep):
     if pt and (rep.level.name, pt[0]) in LEVEL_TAG_FIX:
         return Directive(f"numeric:tag:{pt[0]}", LEVEL_TAG_FIX[rep.level.name, pt[0]], evidence)
     if any(r.status == "nonfinite" for r in fails):
+        # one remedy, chosen by the op (E13: two remedies let the model pick one that breaks a rule)
+        remedy = ("Subtract the row maximum before exp: first loop over the columns to find the "
+                  "running maximum m of each row, then use exp(x - m)."
+                  if rep.level.name in ("softmax", "band_attention") else
+                  "Accumulate in float64: cast each column with .astype(np.float64) before squaring "
+                  "or summing it.")
         return Directive("numeric:nonfinite",
-                         "Some outputs are nan or inf although the true answer is finite. Find "
-                         "the step that overflows or divides by zero for these inputs (for "
-                         "example exp of a large number, or squaring a large number) and rewrite "
-                         "it to stay finite, e.g. subtract the row maximum before exp, or divide "
-                         "by the largest magnitude before squaring.", evidence)
+                         "Some outputs are nan or inf although the true answer is finite: a step "
+                         "overflows for these inputs. " + remedy, evidence)
     if all(r.worst < ROUNDING_CEILING for r in fails):
         return Directive("numeric:precision",
-                         "The logic is right but float32 rounding error is too large. Accumulate "
-                         "in float64: create accumulators with dtype=np.float64 and convert only "
-                         "the final result.", evidence)
+                         "The logic is right but float32 rounding is too large: every output must be "
+                         "within 1e-4 relative error, including outputs close to zero. Compute in "
+                         "float64: cast each slice with .astype(np.float64) before multiplying or "
+                         "adding, keep accumulators in float64, and convert only the final result.",
+                         evidence)
 
     fact = lambda s: any(s in f for f in facts)
     const = next((f.rsplit(" ", 1)[1] for f in facts if f.startswith("every wrong output is exactly")), None)

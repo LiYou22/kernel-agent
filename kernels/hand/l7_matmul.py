@@ -12,8 +12,8 @@ def kernel(a, b):
             acc = np.zeros((i1 - i0, j1 - j0), dtype=np.float64)
             for k0 in range(0, K, 128):
                 k1 = min(k0 + 128, K)
-                at = a[i0:i1, k0:k1]
-                bt = b[k0:k1, j0:j1]
+                at = a[i0:i1, k0:k1].astype(np.float64)
+                bt = b[k0:k1, j0:j1].astype(np.float64)
                 for k in range(k1 - k0):
                     for r in range(i1 - i0):
                         acc[r, :] += at[r, k] * bt[k, :]

@@ -1,7 +1,8 @@
 # Qwen3-8B, live run 1, L4 attempt 7: per-tile mean square AND float32 squares (two bugs at once)
 import numpy as np
 
-def kernel(x, g, eps):
+def kernel(x, eps=1e-6):
+    g = np.ones(x.shape[1], dtype=np.float32)
     M, N = x.shape
     y = np.zeros_like(x, dtype=np.float32)
     tile_rows = 128

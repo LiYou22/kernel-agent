@@ -25,7 +25,8 @@ from . import client
 from .extract import extract_code
 from .harness import verify
 from .levels import LEVELS
-from .translate import Directive, translate
+from . import judge
+from .translate import Directive, judge_directive, translate
 
 def code_version():
     """Hash of the agent/harness sources, logged with every result so runs on different pods can
@@ -38,7 +39,8 @@ def code_version():
 
 
 VERSION = code_version()
-ANSWER_TOKENS = 3000   # room reserved for the reply; the rest of the context is the prompt budget
+ANSWER_TOKENS = 3000
+HOLDOUT_TIMEOUT_S = 120.0   # holdout shapes are larger: a correct per-element kernel must not read as wrong (E21)   # room reserved for the reply; the rest of the context is the prompt budget
 SECTIONS = ("task", "code", "feedback", "ledger")
 
 
@@ -122,9 +124,10 @@ def repair_prompt(level, code, d, ledger, note=""):
         parts.append(("ledger", "Already tried, and it did not fix this:\n"
                                 + "\n".join(f"- {x}" for x in ledger)
                                 + "\nDo something different this time."))
-    parts.append(("task", (note + " " if note else "") + "Change only that and keep everything "
-                          "else identical. Reply with the complete function in one ```python "
-                          "code block."))
+    scope = ("Rewrite the loop structure as needed to make this change, and keep what already "
+             "works." if d.structural else "Change only that and keep everything else identical.")
+    parts.append(("task", (note + " " if note else "") + scope + " Reply with the complete "
+                          "function in one ```python code block."))
     return parts
 
 
@@ -250,8 +253,13 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             continue
 
         r, src, rep = max(cands, key=lambda c: _rank(c[2]))
+        judge_fail = None
         if rep.passed:
-            hold = verify(level, src, holdout=True)
+            ok, jmsg = judge.check(level.num, src)
+            if not ok:
+                judge_fail = judge_directive(level, jmsg)
+        if rep.passed and judge_fail is None:
+            hold = verify(level, src, holdout=True, timeout_s=HOLDOUT_TIMEOUT_S)
             status, conf = ("verified", 0.95) if hold.passed else ("dev-only", 0.3)
             _log(log, Attempt(**base, outcome="pass", summary=rep.summary(), code=src))
             say(_line(level, att, sections, r, f"PASS dev; holdout {hold.n_pass}/{len(hold.results)}"))
@@ -260,8 +268,8 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             _log(log, res)
             return res
 
-        directive = translate(rep)  # in naive mode only the key is used, for the taxonomy
-        report_text = rep.text()
+        directive = judge_fail or translate(rep)  # naive mode uses only the key, for the taxonomy
+        report_text = rep.text() if judge_fail is None else f"{rep.summary()}\nFinal check: {judge_fail.evidence}"
         repeat_code = _code_hash(src) in seen_hashes
         seen_hashes.add(_code_hash(src))
         note = ("Your last reply repeated an earlier version unchanged, so the change was not "
@@ -311,7 +319,7 @@ def _log(log, rec):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--levels", type=int, nargs="+", default=[1, 2, 3])
-    ap.add_argument("--attempts", type=int, default=8)
+    ap.add_argument("--attempts", type=int, default=12)   # v3: L4 runs ran out at 8 (E21)
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--patience", type=int, default=3, help="stop after this many same-class failures in a row")
     ap.add_argument("--repeat", type=int, default=1, help="independent runs per level; report the rate")

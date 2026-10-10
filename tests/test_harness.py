@@ -124,3 +124,27 @@ def test_cost_counts_rereads():
 def test_translator_names_the_cause(level, path, key):
     from kagent.translate import translate
     assert translate(run(level, "broken/" + path)).key == key
+
+
+def test_numpy_alias_on_an_unreached_branch_is_caught():
+    # red team, PR #2: `xp = np; xp.max` on a branch the tests never take passed with 0 violations
+    rep = run(3, "redteam/l3_unreached_alias_max.py")
+    assert not rep.passed and any(v.kind == "max-like" for v in rep.violations), rep.text()
+
+
+@pytest.mark.parametrize("path,key", [("l4_live_broadcast_crash.py", "crash:ValueError"),
+                                      ("l4_live_reshape.py", "rule:layout")])
+def test_rownorm_broadcast_gets_the_column_loop(path, key):
+    # v2 L4: 13 of 37 failures cycled between a broadcast crash and a .reshape violation, and the
+    # layout fix showed a transpose loop; both must now point at the per-column form
+    from kagent.translate import translate
+    d = translate(run(4, "broken/" + path))
+    assert d.key == key and "out[i0:i1, j] = x[i0:i1, j] * rinv" in d.instruction, d.instruction
+
+
+def test_judge_directive_maps_the_organizers_failures():
+    from kagent.translate import judge_directive
+    lv = LEVELS[4]
+    assert judge_directive(lv, "RAISED: TypeError: kernel() missing 1 required positional argument: 'g'").key == "judge:signature"
+    assert judge_directive(lv, "large x: NUMERICAL MISMATCH: worst relative error 0.0008").key == "judge:precision"
+    assert "kernel(x, eps=1e-6)" in judge_directive(lv, "RAISED: TypeError: x").instruction

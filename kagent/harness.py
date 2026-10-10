@@ -353,7 +353,7 @@ def _crash_msg(exc, source_lines):
     return f"{type(exc).__name__}: {exc}{where}"
 
 
-def verify(level, source, holdout=False):
+def verify(level, source, holdout=False, timeout_s=None):
     lines = source.splitlines()
     src = lambda ln: lines[ln - 1].strip() if ln and 0 < ln <= len(lines) else ""
     rep = Report(level)
@@ -378,9 +378,9 @@ def verify(level, source, holdout=False):
         scale = level.scale(args64, ref)
         bound = gamma(level.bound_k(args64)) * scale + level.abs_floor
         try:
-            got = guard.call_kernel(fn, rec, case.args, CASE_TIMEOUT_S)
+            got = guard.call_kernel(fn, rec, case.args, timeout_s or CASE_TIMEOUT_S)
         except guard.KernelTimeout:
-            rep.results.append(CaseResult(case, "timeout", f"timed out after {CASE_TIMEOUT_S:g}s", np.inf))
+            rep.results.append(CaseResult(case, "timeout", f"timed out after {timeout_s or CASE_TIMEOUT_S:g}s", np.inf))
             continue
         except Exception as e:
             rep.results.append(CaseResult(case, "error", _crash_msg(e, lines), np.inf))

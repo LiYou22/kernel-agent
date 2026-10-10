@@ -70,3 +70,28 @@ def test_runs_use_different_wordings_with_the_same_task():
     solve(LEVELS[1], p1, say=lambda *_: None, wording=1)
     assert p0.prompts[0] != p1.prompts[0]
     assert LEVELS[1].task in p0.prompts[0] and LEVELS[1].task in p1.prompts[0]
+
+
+def test_v3_structural_directives_allow_a_loop_rewrite():
+    # E17: a structural fix must not be told to "keep everything else identical"
+    from kagent.agent import repair_prompt
+    from kagent.translate import Directive
+    lv = LEVELS[3]
+    structural = render_text(repair_prompt(lv, GOOD, Directive("numeric:tile-overwrite", "x"), []))
+    local = render_text(repair_prompt(lv, GOOD, Directive("rule:escape", "x"), []))
+    assert "Rewrite the loop structure" in structural and "keep everything else identical" not in structural
+    assert "keep everything else identical" in local
+
+
+def test_v3_crash_directive_names_the_fix():
+    from kagent.harness import verify
+    from kagent.translate import translate
+    src = GOOD.replace("j1 = min(j0 + 512, N)", "j1 = j0 + 512").replace(
+        "out = np.empty((M, N), dtype=np.float32)", "out = np.empty((M, N), dtype=np.float32)\n    t = np.zeros(4)")
+    bad = (K / "hand/l2_row_sum.py").read_text().replace("acc += x[i0:i1, j]", "acc += x[i0:i1, j0:j1][:, j]")
+    d = translate(verify(LEVELS[2], bad))
+    assert d.key == "crash:IndexError" and "partial tile" in d.instruction and "local positions" in d.instruction
+
+
+def render_text(parts):
+    return "\n\n".join(t for _, t in parts)

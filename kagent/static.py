@@ -34,6 +34,21 @@ def check(source, fn_name="kernel"):
                     if a.name in rules.BANNED_NP or mod != "numpy":
                         out.append((node.lineno, rules.np_kind(a.name), f"from {mod} import {a.name}"))
 
+    # red team (PR #2): `xp = np` then `xp.max` slipped past a check that only knew import names.
+    # Propagate plain-name aliases of numpy to a fixed point (xp = np; yp = xp; ...).
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            value = getattr(node, "value", None)
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and \
+                    isinstance(value, ast.Name) and value.id in np_aliases:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    if isinstance(t, ast.Name) and t.id not in np_aliases:
+                        np_aliases.add(t.id)
+                        changed = True
+
     for node in ast.walk(tree):
         line = getattr(node, "lineno", None)
         if isinstance(node, ast.Attribute):
