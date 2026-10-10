@@ -6,7 +6,7 @@ model writes freely, the harness finds what is wrong, and the agent translates t
 concrete change. A second stage makes verified kernels cheaper (FLOPs, HBM traffic, instructions)
 without ever making them wrong.
 
-Results, design and every experiment: `notes/notes.tex` (E1–E21). Team plan and status: `TEAM.md`.
+Results, design and every experiment: `notes/notes.tex` (E1–E23). Team plan and status: `TEAM.md`.
 Deliverables: agent `kagent/`, harness `kagent/harness.py` (tolerance = proven float32 error bound),
 eval set `EVALSET.md`, failure taxonomy `TAXONOMY.md`, token instrumentation `scripts/plot_tokens.py`.
 
@@ -49,6 +49,10 @@ uv run python scripts/plot_tokens.py $R/ours-L1234-seat-130.jsonl 4     # one ru
 python3 scripts/optimize.py --from runs/ours-L1234-seat-130.jsonl --rounds 3 --out runs/opt.jsonl
 uv run python scripts/opt_report.py $R/opt2-live.jsonl
 ```
+
+`main` is agent v2 (version `e22ccab872`, 8 attempts), the version every benchmark arm so far ran.
+Branch `v3` (version `ea9befddac`) holds the next iteration (notes E23): structural directives may
+rewrite loops, one remedy per directive, crash-specific fixes, 12 attempts.
 
 Expected (seat-130, version `e22ccab872`): `ours` L1 5/5, L2 4/5, L3 5/5, L4 1/5; the optimiser
 accepts 5 of 11 rewrites, with up to 79x fewer instructions (`notes/fig-opt2.png`).
