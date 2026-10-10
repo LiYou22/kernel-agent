@@ -851,6 +851,41 @@ after 17:30, it is this one, because it targets the blocker the logs show: give 
 for \code{whole-array} violations too (instead of the ``must keep'' list or prompt-varied sampling).
 
 %==============================================================================
+\section{v2 and v3, side by side}
+\label{sec:v2v3}
+
+Same harness, same eval set and error bounds, same first prompt. They differ in how a verdict is turned
+into the next prompt, plus a few check and budget settings. \code{main} = v2 (\code{e22ccab872}, the frozen
+baseline of every comparison so far); branch \code{v3} (\code{29fd8d90d5}).
+
+\noindent\begin{tabularx}{\linewidth}{@{}c>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{3.6cm}Y@{}}
+\toprule
+\# & v3 change & Scope & Why (evidence) \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{How the agent instructs the model}} \\
+1 & Structural directives end with ``rewrite the loop structure as needed'' (v2: always ``change only that, keep everything else identical'') & \textbf{widest}: every directive except local ones & the two instructions contradict for fixes that need loops rebuilt (E17; NKI L4 72/80) \\
+2 & One remedy per directive (float64 only; softmax: subtract the max) & overflow directives & a second remedy invited \code{np.max} (E13) \\
+3 & Crash directives name the fix (index past a partial tile, shape mismatch, array into an element, negative size) & crash directives & L5/L6 stuck on three identical crashes (E21) \\
+4 & Row-norm broadcast and layout errors get the per-column form \code{out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]} & L4, L5, L8 & 13 of 37 v2 L4 failures; the layout fix showed a transpose loop (E25) \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Checks and budget}} \\
+5 & 12 attempts (v2: 8); holdout timeout 120\,s (v2: 20\,s) & budget, holdout & L4 ran out at 8 (E18); slow-but-correct read as dev-only (E21) \\
+6 & Static check tracks numpy aliases (\code{xp = np}) & adversarial code only & red team PR \#2 \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\textbf{What the first v3 run shows} (E25, E28). Change 1 cuts both ways: allowed to restructure, the
+model got every L4 number right for the first time (24/24 from attempt 9), but rewrites also drop fixes
+made earlier, so the trajectory oscillates (banned reduction and layout errors return). Change 4 works
+where it applies (the broadcast hurdle is cleared in one step) but misses \code{whole-array} violations,
+which is now the last obstacle at L4.
+
+\textbf{Caveat.} The six changes were introduced together, so the E26 verdict can only say whether v3 as
+a whole is better; it cannot attribute a gain or loss to one change. The clean protocol, one change per
+arm, did not fit in the remaining time and compute; we report this as a limitation.
+
+%==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
 in parallel: \code{ours} L1--4 (130), \code{naive} L1--4 (132), \code{ours} L5--7 (133),
