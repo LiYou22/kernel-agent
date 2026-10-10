@@ -1,0 +1,4 @@
+attempts.jsonl
+*.jsonl
+*.log
+memory_bank.json
