@@ -725,6 +725,52 @@ run as a separate \code{ours-v3} arm on the walls (L4--L6) when a pod is free, a
 on the same levels: if the changes help, the solve rate there should move; if not, they are reverted,
 as the upstream team did with an improvement that measured worse.
 
+\entry{E24: final v2 results: ours vs naive, L5--7 on two seats, calibration, red team}{2026-10-10}
+\textbf{Ours vs naive, L1--4} (5 runs each, version \code{e22ccab872}, seat-130):
+
+\begin{tabular}{@{}lllll@{}}
+\toprule
+Level & ours & naive & ours attempts (verified) & naive attempts (verified) \\
+\midrule
+L1 relu & 5/5 & 3/5 & 1.6 & 1.7 \\
+L2 row sum & 4/5 & 0/5 & 3.8 & -- \\
+L3 row max & 5/5 & 1/5 & 5.2 & 7.0 \\
+L4 RMSNorm & 1/5 & 0/5 & 6.0 & -- \\
+\midrule
+total & \textbf{15/20} & \textbf{4/20} & & \\
+\bottomrule
+\end{tabular}
+
+\medskip
+Translating verdicts into instructions is worth $15/20$ against $4/20$ with everything else equal.
+naive stops on rule violations (L2: banned reduction $\times5$; L4: hid the tiling $\times3$), mostly at
+attempt 3, because the verbatim verdict makes the model repeat itself.
+
+\textbf{Ours L5--7} (v2), 5 runs on each of seat-130 and seat-133: L5 0/5 and 0/5, L6 0/5 and 0/5,
+L7 0/5 and 0/5. Unsolved runs stopped on: L5 hid the tiling $\times3$, L6 crash $\times4$, L7 hid the
+tiling $\times4$. This is the target of v3 (running on seat-130 on L4--L6, 12 attempts).
+
+\textbf{Calibration}: all three L7 ``dev-only'' kernels (seat-130 runs 1 and 3, seat-133 run 4) re-check
+as slow-but-correct (10/10 holdout with a long timeout). So every v2 ``verified'' was right and every
+v2 ``dev-only'' was correct but slow: the 0.3 confidence was too low, and v3's 120\,s holdout timeout
+removes the artefact.
+
+\textbf{Efficiency}: naive's one verified L3 kernel runs at roofline $3.02\times$ with 405{,}183
+instructions of one element.
+
+\textbf{Taxonomy} (all v2 runs, regenerated): ``fixed the error shown but broke something else'' in 32 of
+128 ours repairs and 9 of 62 naive repairs.
+
+\input{generated/taxonomy.tex}
+
+\medskip
+\textbf{Red team (PR \#2, seat-133)}: \code{xp = np; xp.max} on a branch the tests never take passed the
+static check with zero violations. Fixed on branch \code{v3} (aliases propagated to a fixed point, with
+a regression test; v3 version \code{eddb241adf}). The runtime guard would have caught it if executed.
+
+\textbf{Stage B (teammate, reported in PR \#4)}: with feedback v5 (naming the wrong \code{.ap()} strides),
+NKI L1 average pool went from 0/5 (0.30) to 5/5; NKI L4 1/5 with v2.
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
