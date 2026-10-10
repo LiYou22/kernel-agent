@@ -25,6 +25,14 @@ class Recorder:
     def __init__(self):
         self.violations = {}  # (line, kind) -> what
         self._quiet = 0
+        self.reset_cost()
+
+    def reset_cost(self):
+        # A Stage-A stand-in for an NKI trace: inputs live in "HBM"; every elementwise op is one
+        # instruction whose FLOPs are its output elements; slicing an input is a load and
+        # writing into the returned array is a store.
+        self.ops = self.flops = self.hbm_read = 0
+        self.writes = {}
 
     @contextlib.contextmanager
     def quiet(self):
@@ -100,7 +108,11 @@ class TArray(_np.ndarray):
 
     def __getitem__(self, key):
         _check_key(key)
-        return super().__getitem__(key)
+        res = super().__getitem__(key)
+        r = _REC
+        if r is not None and not r._quiet and self.__dict__.get("_hbm"):
+            r.hbm_read += res.nbytes if isinstance(res, _np.ndarray) else self.itemsize
+        return res
 
     def __setitem__(self, key, value):
         _check_key(key)
@@ -111,6 +123,7 @@ class TArray(_np.ndarray):
             tshape = getattr(target, "shape", ())
             if _oversize(tshape):
                 rec.add("whole-array", f"assignment writes a region of shape {tshape}")
+            rec.writes[id(self)] = rec.writes.get(id(self), 0) + int(_np.prod(tshape)) * self.itemsize
             vshape = getattr(value, "shape", ())
             squeeze = lambda s: tuple(d for d in s if d != 1)
             if vshape != () and squeeze(vshape) != squeeze(tshape):
@@ -132,6 +145,11 @@ class TArray(_np.ndarray):
         if out is not None:
             kwargs["out"] = tuple(o.view(_np.ndarray) if isinstance(o, TArray) else o for o in out)
         res = getattr(ufunc, method)(*args, **kwargs)
+        r = _REC
+        if r is not None and not r._quiet:
+            r.ops += 1
+            first = kwargs["out"][0] if out is not None else (res[0] if isinstance(res, tuple) else res)
+            r.flops += getattr(first, "size", 1)
         if out is not None:
             return out[0] if len(out) == 1 else out
         return _wrap(res)
@@ -267,15 +285,21 @@ def call_kernel(fn, rec, args, timeout_s):
     """Run one case. Inputs are copied (a kernel that mutates its inputs can't poison later cases)."""
     global _REC
     guarded = [a.copy().view(TArray) if isinstance(a, _np.ndarray) else a for a in args]
+    for g in guarded:
+        if isinstance(g, TArray):
+            g._hbm = True
+    rec.reset_cost()
     _REC = rec
     old = signal.signal(signal.SIGALRM, _on_alarm)
     signal.setitimer(signal.ITIMER_REAL, timeout_s)
     try:
-        out = fn(*guarded)
+        with _np.errstate(all="ignore"):  # overflow is the kernel's bug to report, not noise
+            out = fn(*guarded)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old)
         _REC = None
+    rec.hbm_write = rec.writes.get(id(out), getattr(out, "nbytes", 0))
     if isinstance(out, _np.ndarray):
         out = out.view(_np.ndarray)
     return out

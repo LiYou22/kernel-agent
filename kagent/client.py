@@ -62,6 +62,11 @@ def count_tokens(messages, think=False):
     return _post("/tokenize", body, 30)["count"]
 
 
+def count_text(text):
+    """Tokens in raw text (no chat template): used to split a prompt's cost by section."""
+    return _post("/tokenize", {"model": MODEL, "prompt": text}, 30)["count"]
+
+
 def chat(messages, max_tokens=4000, temperature=0.6, sample=0, think=False, use_cache=True):
     """`sample` only distinguishes cache entries. A per-request `seed` would make this reproducible,
     but on Neuron vLLM it kills the engine (no device RNG generator), so it is never sent."""

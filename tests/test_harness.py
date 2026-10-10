@@ -15,11 +15,22 @@ def run(level, path):
 
 
 @pytest.mark.parametrize("level,path", [(1, "hand/l1_relu_affine.py"), (2, "hand/l2_row_sum.py"),
-                                        (3, "hand/l3_row_max.py")])
+                                        (3, "hand/l3_row_max.py"), (4, "hand/l4_rmsnorm.py"),
+                                        (5, "hand/l5_softmax.py"), (6, "hand/l6_transpose.py"),
+                                        (7, "hand/l7_matmul.py")])
 def test_correct_kernels_pass(level, path):
     rep = run(level, path)
     assert rep.passed, rep.text()
-    assert max(r.worst for r in rep.results) < 1e-7  # only output rounding
+    assert rep.bound_use() < 0.5  # comfortably inside the proven float32 bound
+    assert verify(LEVELS[level], (K / path).read_text(), holdout=True).passed
+
+
+def test_float32_accumulation_is_within_the_proven_bound():
+    # sum of N float32 terms: |s_hat - s| <= gamma_(N-1) sum|x|. A float32 accumulator is a
+    # correct float32 algorithm, so it must pass; it just spends more of its bound than float64.
+    f32, f64 = run(2, "hand/l2_row_sum_f32acc.py"), run(2, "hand/l2_row_sum.py")
+    assert f32.passed and f64.passed
+    assert 0.05 < f32.bound_use() <= 1 and f64.bound_use() < 0.05
 
 
 # (level, file, expected violation kinds, substring the feedback must contain)
@@ -30,9 +41,18 @@ BROKEN = [
     (1, "l1_off_by_one_rows.py", set(), "only the last row"),
     (2, "l2_np_sum.py", {"sum-like"}, None),
     (2, "l2_tile_width_assumed.py", set(), "'partial-col-tile'"),
-    (2, "l2_float32_accumulator.py", set(), "accumulate in float64"),
     (3, "l3_zero_init.py", set(), "every wrong output is exactly 0"),
     (3, "l3_sentinel_init.py", set(), "every failing case is 'huge-negative'"),
+    # found in the first live run: the per-row max is overwritten for each column tile
+    (3, "l3_overwrite_per_tile.py", set(), "equals the result over the last column tile only"),
+    (4, "l4_float32_squares.py", set(), "'huge-magnitude'"),
+    (4, "l4_per_tile_rms.py", set(), "statistic of that tile alone"),
+    (5, "l5_no_max_subtraction.py", set(), "non-finite"),
+    (5, "l5_per_tile_softmax.py", set(), "statistic of that tile alone"),
+    (6, "l6_skip_partial.py", set(), "never written"),
+    (6, "l6_tile_origin.py", set(), "'multi-row-tile'"),
+    (7, "l7_drop_k_tail.py", set(), "'partial-k-tile'"),
+    (7, "l7_matmul_operator.py", {"whole-array", "matmul-op"}, None),
 ]
 
 
@@ -58,3 +78,28 @@ def test_banned_imports_and_syntax():
     assert verify(LEVELS[1], "import scipy\ndef kernel(x, a, b):\n    return x\n").violations[0].kind == "import"
     rep = verify(LEVELS[1], "def kernel(x, a, b)\n    return x\n")
     assert rep.load_error and "syntax" in rep.failure_classes()
+
+
+def test_cost_counts_rereads():
+    good = run(1, "hand/l1_relu_affine.py").cost
+    assert good["flops"] == good["min_flops"] and good["hbm_read"] == good["min_read"]
+    # loads every tile twice: same answer, double the HBM traffic
+    src = (K / "hand/l1_relu_affine.py").read_text().replace(
+        "out[i0:i1, j0:j1] = np.maximum(x[i0:i1, j0:j1] * a + b, 0.0)",
+        "t = x[i0:i1, j0:j1] * a\n            out[i0:i1, j0:j1] = np.maximum(t + b + 0.0 * x[i0:i1, j0:j1], 0.0)")
+    c = verify(LEVELS[1], src).cost
+    assert c["hbm_read"] == 2 * c["min_read"] and c["flops"] > c["min_flops"]
+
+
+@pytest.mark.parametrize("level,path,key", [
+    (3, "l3_overwrite_per_tile.py", "numeric:tile-overwrite"),
+    (4, "l4_float32_squares.py", "numeric:tag:huge-magnitude"),
+    (4, "l4_per_tile_rms.py", "numeric:per-tile-stat"),
+    (5, "l5_no_max_subtraction.py", "numeric:nonfinite"),
+    (5, "l5_per_tile_softmax.py", "numeric:per-tile-stat"),
+    (6, "l6_skip_partial.py", "numeric:partial-row"),
+    (7, "l7_drop_k_tail.py", "numeric:tag:partial-k-tile"),
+])
+def test_translator_names_the_cause(level, path, key):
+    from kagent.translate import translate
+    assert translate(run(level, "broken/" + path)).key == key

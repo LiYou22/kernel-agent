@@ -6,6 +6,7 @@
 \usepackage{listings}
 \usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 \usepackage{amsmath}
+\usepackage{graphicx}
 \usepackage{enumitem}
 \setlist{nosep,leftmargin=*}
 \emergencystretch=2em
@@ -94,42 +95,76 @@ kernel line number, instead of raising. One run therefore reports \emph{all} bro
 \emph{and} the numerical result. Violations on one line are deduplicated (e.g.\ \code{np.sum} also
 trips \code{np.add.reduce}; only the specific one is shown).
 
-\subsection{Tolerance}
+\subsection{Tolerance: a proven float32 error bound}
 \label{sec:tol}
 
-A case passes iff for every output element
+\emph{Revised 2026-10-10 after feedback from an Amazon engineer: ``bound the error''.} The first
+version used a chosen constant (RTOL $=10^{-5}$). Now the tolerance is the classical forward error
+bound of the float32 algorithm (Higham, \emph{Accuracy and Stability of Numerical Algorithms},
+ch.~3--4). A case passes iff, for every output element,
 \[
-  |y_{\text{got}} - y_{\text{ref}}| \;\le\; \text{RTOL}\cdot s, \qquad \text{RTOL}=10^{-5},
+  |y_{\text{got}} - y_{\text{ref}}| \;\le\; \gamma_k\, s,
+  \qquad \gamma_k = \frac{k\,u}{1-k\,u},\quad u = 2^{-24},
 \]
-where $y_{\text{ref}}$ is float64 on the exact float32 inputs and $s$ is a per-level
-\emph{condition-aware scale}: the magnitude a backward-stable float32 algorithm's error is
-proportional to.
+where $y_{\text{ref}}$ is float64 on the exact float32 inputs, $s$ is the magnitude that appears in
+the backward error analysis, and $k$ counts the roundings on the path to one output.
 
-\begin{tabular}{@{}lll@{}}
+\begin{tabular}{@{}llll@{}}
 \toprule
-Level & Op & scale $s$ \\
+Level & Op & $s$ & $k$ \\
 \midrule
-1 & $\mathrm{relu}(ax+b)$ & $|a||x|+|b|$ \\
-2 & row sum & $\sum_j |x_{ij}|$ (not $|\sum_j x_{ij}|$, which can cancel to 0) \\
-3 & row max & $\max_j |x_{ij}|$ (max is exact; any error is a bug) \\
+1 & $\mathrm{relu}(ax+b)$ & $|a||x|+|b|$ & 3 (mul, add, store) \\
+2 & row sum, $N$ terms & $\sum_j |x_{ij}|$ & $N$ ($\gamma_{N-1}$ for any summation order, $+$ store) \\
+3 & row max & $\max_j |x_{ij}|$ & 0 (max is exact: bit-exact required) \\
 \bottomrule
 \end{tabular}
 
 \medskip
-\noindent Justification:
+Consequences:
 \begin{itemize}
-  \item \emph{Floor.} float32 $\varepsilon = 1.19\times10^{-7}$; output rounding alone is
-        $\le 6\times10^{-8}$. Measured worst error of our float64-accumulating hand kernels:
-        $8.4\times10^{-8}$.
-  \item \emph{Ceiling.} Every bug class targeted (dropped partial tile, wrong identity,
-        overflow, missing max-subtraction, $E[x^2]-E[x]^2$) produces errors $\geq 10^{-3}$, two
-        orders above the threshold. A looser tolerance only buys room for silent bugs.
-  \item \emph{float32 accumulation is not enough} (E2 below): it measured
-        $1.5\times10^{-5}$ on constant rows. We therefore require float64 accumulators. Errors
-        under $10^{-3}\cdot s$ are reported as ``rounding-sized, accumulate in float64'' so
-        the agent does not hunt for a logic bug that isn't there.
-  \item Non-finite output where the reference is finite always fails.
+  \item Any kernel that is correct \emph{in float32 arithmetic} passes, whatever its summation
+        order. A float64 accumulator passes with room to spare. The tolerance no longer encodes a
+        preference; it encodes what float32 can guarantee.
+  \item Bugs still fail by a wide margin: they give errors $\ge 10^{-3}\,s$, while
+        $\gamma_{2053} = 1.2\times10^{-4}$ at our longest row.
+  \item Every passing kernel reports its \textbf{bound use}, $\max|y_{\text{got}}-y_{\text{ref}}|
+        / (\gamma_k s)$: how much of its allowed error it spends. Measured: L1 47\%, L2 with a
+        float64 accumulator 1\%, with a float32 accumulator 24\%, L3 0\%.
+  \item Errors that exceed the bound but stay under $10^{-3}s$ are labelled rounding-sized
+        (``accumulate in float64''), so the agent does not hunt for a logic bug.
 \end{itemize}
+
+\subsection{Efficiency accounting}
+\label{sec:eff}
+
+\emph{Also from the Amazon feedback: measure efficiency in FLOPs.} On Trainium this comes from
+NKI-side instrumentation (the pod's \code{nkibench.py} already counts HBM bytes by wrapping
+\code{nisa.dma\_copy}). Stage~A has no device, so the runtime guard keeps the same books:
+
+\begin{itemize}
+  \item inputs live in ``HBM''; slicing one is a load (\code{hbm\_read} += bytes);
+  \item each elementwise op is one instruction; its FLOPs are its output elements;
+  \item writes into the returned array are stores (\code{hbm\_write}).
+\end{itemize}
+Measured on the largest dev case and compared with the op's minimum (input bytes, output bytes,
+FLOPs of the direct algorithm):
+
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Kernel & FLOPs / min & reads / min & instructions & elements / instr. \\
+\midrule
+L1 hand & 1.00 & 1.00 & 18 & 22{,}510 \\
+L2 hand & 1.00 & 1.00 & 2{,}062 & 66 \\
+L3 hand & 1.00 & 1.00 & 2{,}062 & 66 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+Reading: no redundant work or traffic, but the reductions issue one instruction per column, each
+touching only $\le 128$ elements of a possible $128\times512$. That is the price of the rule that
+bans tile-level reductions; on the device the fix is a free-axis reduce instruction. A test pins
+the accounting: a kernel that loads every tile twice reports exactly $2\times$ the minimal reads.
+For now efficiency is reported, not scored.
 
 \subsection{Failure description}
 
@@ -185,12 +220,13 @@ Level & Hostile kinds & Cases \\
 Correct L1--L3 kernels: 40/40, 28/28, 24/24. Worst error $8.4\times10^{-8}\cdot s$
 (output rounding).
 
-\entry{E2: float32 accumulation fails the tolerance}{2026-10-10}
-A logically correct row sum accumulating in float32 failed one case:
-\code{constant-rows 131x1031}, error $1.5\times10^{-5}\cdot s$ in 27/131 rows. Rounding error
-does not average out when every addend is identical. Decision: keep RTOL $=10^{-5}$, require
-float64 accumulation, and label sub-$10^{-3}$ errors as rounding in the feedback. This is the
-``accumulator dtype'' trap of levels 4 and 7 showing up already at level 2.
+\entry{E2: float32 accumulation and the tolerance}{2026-10-10}
+A logically correct row sum accumulating in float32 failed the first, constant tolerance
+($10^{-5}s$) on \code{constant-rows 131x1031} with error $1.5\times10^{-5}s$: rounding errors do
+not average out when every addend is identical. We first ruled ``accumulate in float64''.
+\textbf{Superseded by E7}: under the proven bound $\gamma_{1031}s = 6.1\times10^{-5}s$ that kernel
+is correct and uses 24\% of its bound. The constant tolerance was rejecting a correct float32
+algorithm; the bound is the honest line.
 
 \entry{E3: deliberate bugs are caught}{2026-10-10}
 {\small
@@ -229,6 +265,82 @@ Three defects found by reading the harness output on our own bugs:
 Lesson: the harness's wrong \emph{explanation} is as harmful as a wrong verdict, because it
 points the model at the wrong fix.
 
+\entry{E7: error bounds replace the constant tolerance}{2026-10-10}
+See \S\ref{sec:tol}. All hand kernels pass with bound use $\le 47\%$; the float32-accumulator
+kernel moves from \code{kernels/broken/} to \code{kernels/hand/}; every deliberate bug still fails.
+
+\entry{E8: efficiency accounting}{2026-10-10}
+See \S\ref{sec:eff}. Hand kernels are at the minimum for FLOPs and traffic; reductions use
+$\sim$0.1\% of a tile per instruction.
+
+%==============================================================================
+\section{The repair loop}
+\label{sec:loop}
+
+\code{kagent/agent.py} and \code{kagent/translate.py}.
+
+\subsection{One attempt}
+\begin{enumerate}
+  \item \textbf{Prompt.} Attempt 1: the one-sentence task and signature (E6 prompt). Later:
+        task line + previous code + \emph{one} directive (+ short evidence) + the ledger only if
+        this failure class has been seen before. Never the reference, never a rules list.
+  \item \textbf{Account.} Input tokens per section (task, code, feedback, ledger) from the
+        server's tokenizer; chat-template overhead is the remainder.
+  \item \textbf{Reply gate.} Truncated, empty or code-less replies never reach the checker. The
+        next prompt changes (shorter first prompt, or ``code block only''), because a greedy
+        model given the same prompt repeats itself.
+  \item \textbf{Verify} on dev cases; with several samples, keep the best by
+        (passed, loads, no crash, cases passed, fewest violations).
+  \item \textbf{Translate} the report into one directive (\code{translate.py}), in this order:
+        load $\to$ crash $\to$ shape $\to$ rules (structural ones first, same-kind lines grouped)
+        $\to$ numerics (non-finite, rounding, wrong identity, last row/col, partial tile,
+        constant output, tag pattern, other). Each directive has a \emph{failure class} key.
+  \item \textbf{Stop} when a class repeats \code{patience} (3) times in a row: ``stuck''.
+\end{enumerate}
+
+\subsection{Verdict and confidence}
+A dev pass is re-checked on \emph{holdout} cases (other random shapes and seeds, never shown to the
+model). Passed both: \code{verified}, confidence 0.95. Passed dev only: \code{dev-only}, 0.3: the
+kernel fits the cases it was repaired against. Otherwise \code{failed}/\code{stuck}, 0. These
+numbers are priors; repeated runs will calibrate them.
+
+\subsection{What the translator does with our deliberate bugs}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Bug & Directive class \\
+\midrule
+whole-array op / mask / \code{np.sum} & \code{rule:whole-array} / \code{rule:fancy-index} / \code{rule:sum-like} \\
+row bound \code{M-1} & \code{numeric:last-row} \\
+partial column tile skipped & \code{numeric:partial-col} \\
+max starts at 0 or $-10^9$ & \code{numeric:identity} \\
+tail width off by one & \code{numeric:tag:partial-col-tile} \\
+\bottomrule
+\end{tabular}
+
+\medskip
+Getting there needed one more harness change: single-tile or single-row cases cannot
+\emph{show} ``only the last row is wrong'', so they used to count against that fact. They now carry
+it as \emph{consistent} (prefixed \code{\textasciitilde}), which supports a cross-case fact without
+being evidence for it; a fact still needs at least one case that shows it.
+
+\subsection{Token instrumentation}
+Each attempt is a JSONL record; \code{scripts/plot\_tokens.py} draws input tokens per attempt by
+section and prints the same numbers as a table. Figure~\ref{fig:tok} is a scripted (no model) run
+that exercises every path; token counts there are estimates.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\linewidth]{fig-tokens-scripted.png}
+\caption{Scripted run. L1: violation, mask, the same mask again (ledger appears), pass. L2: empty
+reply (shorter re-ask), \code{np.sum}, pass.}
+\label{fig:tok}
+\end{figure}
+
+Tests: \code{tests/test\_agent.py} (5) drive the loop with a scripted model: no rules in the first
+prompt, one-round repair of the E6 violation, no-code replies change the prompt, a repeated class
+brings the ledger and then stops, and a kernel that passes dev but fails holdout is not
+``verified''.
+
 %==============================================================================
 \section{External evidence: another team's runs (project 2)}
 \label{sec:external}
@@ -257,6 +369,74 @@ Level & Qwen3-8B (sampling, 5 runs) & gpt-oss-20b (greedy, 3 runs) \\
 Consequences for us: terse generation prompts, a ledger of failed attempts so a retry is never
 a resend, \code{finish\_reason} checked and ``empty answer'' counted as its own failure class,
 and every reported number given as a rate over repeats.
+
+%==============================================================================
+\section{Live results}
+\label{sec:results}
+
+\subsection{Protocol}
+\begin{itemize}
+  \item Two arms on L1--L3, 5 independent runs each, at most 8 attempts per level, 1 sample,
+        \code{temperature=0.6}, Qwen3-8B on the seat-130 vLLM (thinking off).
+        \textbf{ours}: translated directives, ledger, reply gate.
+        \textbf{naive} (ablation): the checker's report verbatim, no ledger, no reply gate.
+        Stopping rule (3 same-class failures), holdout check and scoring are identical.
+  \item Both arms run against the \emph{same} harness version: the pod copy is frozen until both
+        finish. Harness improvements found meanwhile (E9) go into a later ``ours v2'' run.
+  \item The server is shared with the user's project-2 benchmark, so latencies (40--100\,s per
+        call instead of 13\,s) are inflated; solve rates and tokens are not affected.
+  \item Summaries come from \code{scripts/analyze.py}, which reads the JSONL logs and writes the
+        LaTeX tables in \code{notes/generated/}; only rates over runs are reported.
+\end{itemize}
+
+\subsection{Run 1 of ``ours'' (in progress)}
+\begin{tabularx}{\linewidth}{@{}lY@{}}
+\toprule
+Level & Attempts \\
+\midrule
+L1 & 1: \code{np.asarray} $\to$ \code{rule:escape}. 2: \textbf{verified}, holdout 30/30. Exactly the
+  challenge's worked example: free generation, then one named repair. 401 input tokens in total. \\
+L2 & 1: \code{np.sum} $\to$ \code{rule:sum-like}. 2: column loop, but indexes the tile with the
+  global column, \code{IndexError: index 512 is out of bounds for axis 1 with size 188}: the
+  partial-tile trap. 3: \textbf{verified}, holdout 21/21. Our demo's failure-and-recovery case. \\
+L3 & 1: \code{np.max} on a row slice. 2: vector accumulator assigned to a scalar, crash. 3: back to
+  \code{np.max} (a regression; the ledger appears in attempt 4). 4, 5: rule-clean but 15/24
+  correct, \code{numeric:other} twice. See E9. \\
+\bottomrule
+\end{tabularx}
+
+\entry{E9: the first live failure the translator could not name}{2026-10-10}
+L3 attempts 4--5 compute each row's max per column tile and \emph{assign} it,
+\code{result[row] = acc}, inside the column-tile loop: every tile overwrites the previous one, so
+the output is the max over the \emph{last} column tile only. None of our location or value facts
+describes that, and the tag pattern is too weak (constant-row and zero cases pass by accident), so
+the directive was the useless ``re-derive the formula''. New diagnostic for row reductions:
+recompute the reference on each column tile alone and test whether the wrong outputs equal one of
+them. The fact ``each wrong output equals the result over the last column tile only'' now yields
+\code{numeric:tile-overwrite}: ``keep one running value per row across all column tiles; write it
+after the loop''. The live kernel is in \code{kernels/broken/l3\_overwrite\_per\_tile.py} with a
+test. Lesson: the deliberate-bug suite is a floor, not a ceiling; the model's own bugs extend it.
+
+%==============================================================================
+\section{Plan}
+\label{sec:plan}
+
+\begin{tabularx}{\linewidth}{@{}clY@{}}
+\toprule
+\# & Status & Step \\
+\midrule
+1 & done & Harness for L1--3: rules (static + runtime), proven error bounds, diagnosis, efficiency \\
+2 & done & Hand kernels and deliberate bugs; 22 self-tests \\
+3 & done & Model client, repair loop, translator, ledger, reply gate, holdout confidence \\
+4 & done & Token accounting and plot; naive ablation arm; results analysis script \\
+5 & running & Live benchmark L1--3: ours $\times5$, then naive $\times5$ (queued) \\
+6 & next & L4--L7 harness: RMSNorm, softmax, transpose, matmul (references, bounds, hostile
+  cases, hand and broken kernels, translator coverage) \\
+7 & later & ``ours v2'' with E9 and later fixes; L4--7 benchmarks for both arms \\
+8 & later & L8--10 (layernorm cancellation, banded attention, strided/dilated conv) \\
+9 & later & Failure taxonomy across all runs; one-page reproduction note; demo \\
+\bottomrule
+\end{tabularx}
 
 %==============================================================================
 \section{Reading of the existing agent (\code{projects/02-kernel-agent/agent.py})}
@@ -341,6 +521,46 @@ wrong numerics. That changes what you would try next.
         a model failure.
 \end{itemize}
 
+\subsection{What ``0.30'' crashes on: a taxonomy of the user's run}
+Source: the user's \code{agent.py --all --rounds 8 --samples 4} run in seat-130 (crashed by E5),
+plus the README's own transcripts. Every one of these is an exception in the simulator, so every
+shape fails to run and the reward is $0.1+0.2=0.30$. Four kinds:
+
+\noindent\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{5.2cm}Y@{}}
+\toprule
+Kind & Example (error) & Cause \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{1. Invented function}} \\
+\code{nisa.multiply}, \code{nisa.scalar\_mul} & \code{module 'nki.isa' has no attribute ...} & does not exist;
+  real ones are \code{nisa.tensor\_scalar}, \code{nisa.tensor\_tensor} \\
+\code{nl.dot}, \code{nl.value}, \code{nl.sbuf\_scalar}, \code{tile.mean} & (README run 2) & same \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{2. Real function, invented argument}} \\
+\code{nisa.nc\_matmul(..., transpose\_moving=)} & \code{unexpected keyword argument} & real signature has
+  \code{is\_transpose}, no \code{transpose\_moving} \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{3. Real call, constraint violated}} \\
+\code{nisa.dma\_copy(dst=, src=)} & \code{same number of elements, got src=4, dst=16384} & destination tile
+  allocated $128\times128$, 4 elements moved; \code{dma\_copy} neither slices nor broadcasts \\
+\code{nisa.nc\_matmul} & \code{dst must be in ['psum'], got sbuf} & matmul output must live in PSUM \\
+\code{nl.ndarray(..., buffer=nl.sbuf)} & \code{must have at least 2 dimensions} & on-chip tiles are 2-D
+  (partition $\times$ free) \\
+\code{nl.sbuf(shape, dtype)} & \code{'MemoryRegion' object is not callable} (README run 3) &
+  \code{nl.sbuf} is a memory region; allocate with \code{nl.ndarray(..., buffer=nl.sbuf)} \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{4. Not an API error: tiling}} \\
+slice \code{[0:128]} on a 32-row tensor & \code{Out-of-bound access ... [0, 127] exceed ... 32} &
+  the tile limit used as a fixed size; the NKI form of our partial-tile trap. L2 hit it 4 rounds running \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+Two observations. (a) Each repair fixes one error and surfaces a new one (PSUM placement fixed in
+round 3, \code{nisa.multiply} invented in round 4): the model does not know NKI and explores it by
+crashing. Stage~A's NumPy is familiar to the model, so classes 1--3 essentially vanish there.
+(b) For Stage~B the prompt needs a card of \emph{real} signatures, retrieved from the SDK
+(\code{inspect.signature}) for the functions the kernel uses, rather than a static list.
+
 \subsection{What we keep, and what we change}
 
 \begin{tabularx}{\linewidth}{@{}YY@{}}
@@ -408,8 +628,7 @@ is the next step.
         $1/\sqrt d$ (to confirm).
   \item Level 10: cross-correlation, no padding,
         $L_{\text{out}} = \lfloor (L - d(K-1) - 1)/s \rfloor + 1$.
-  \item Next: model client (finish\_reason, token counting), one call at L1, then the repair
-        loop with per-attempt token instrumentation (docs vs error vs code).
+  \item Next steps: see \S\ref{sec:plan}.
 \end{itemize}
 
 \end{document}
