@@ -34,6 +34,11 @@ TAG_MEANING = {
     "cancelling": "values of +-1e6 cancel to a small result",
     "negative-scale": "the scale a is negative",
     "huge-magnitude": "values are around +-1e18",
+    "w-ge-S": "the window w is at least the sequence length",
+    "w-0": "the window w is 0",
+    "receptive-field-eq-L": "the receptive field equals L (one output)",
+    "dilation-gt1": "dilation > 1",
+    "stride-gt1": "stride > 1",
     "index-coded": "values are 1, 2, 3, ... (they encode their position)",
     "partial-k-tile": f"K is not a multiple of {TILE_R}",
     "multi-k-tile": f"K > {TILE_R}",
@@ -56,9 +61,30 @@ TAG_FIX = {
     "multi-col-tile": "Results are wrong exactly when there is more than one column tile. Every "
                       "tile must use its own origin: read and write global column j0 + c, never "
                       "the local c, so later tiles do not overwrite earlier ones.",
+    "w-ge-S": "Results are wrong exactly when the window w is at least the sequence length. Clip "
+              "the window to j in [max(0, i - w), min(S - 1, i + w)].",
+    "w-0": "Results are wrong exactly when w = 0. Then the window is just j = i and out[i] = v[i].",
+    "receptive-field-eq-L": "Results are wrong exactly when the receptive field dilation*(K-1)+1 "
+                            "equals L. Then L_out = 1: compute L_out = (L - dilation*(K-1) - 1) "
+                            "// stride + 1 and let every loop run over range(L_out).",
+    "dilation-gt1": "Results are wrong exactly when dilation > 1. Tap k of output t reads "
+                    "x[c, t*stride + k*dilation].",
+    "stride-gt1": "Results are wrong exactly when stride > 1. Output t starts at input position "
+                  "t*stride.",
     "k-1": "Results are wrong exactly when K = 1. Make every K loop and slice work for K = 1.",
     "dim-1": "Results are wrong exactly when M or N is 1. Make every loop and slice work for a "
              "dimension of exactly 1.",
+}
+
+
+# the same tag can mean different bugs at different levels (large-mean: exp overflow in softmax,
+# cancellation in layernorm), so these take precedence over the generic table and over nonfinite
+LEVEL_TAG_FIX = {
+    ("layernorm", "large-mean"):
+        "Rows with a large mean (around 1e4) and spread 1 lose all precision: computing the "
+        "variance as mean(x**2) - mean(x)**2 cancels catastrophically (and can go negative). "
+        "Compute the mean first, then the variance as the mean of (x - mean)**2 in a second pass, "
+        "accumulating in float64.",
 }
 
 
@@ -126,6 +152,17 @@ def translate(rep):
 def _numeric(rep):
     fails = [r for r in rep.results if r.status != "pass"]
     evidence = rep.numeric_feedback(max_cases=1)
+    facts, _ = common_facts(fails)
+    if any("mean is large compared to their spread" in f for f in facts):
+        return Directive("numeric:cancellation",
+                         "Only rows whose mean is large next to their spread are wrong: the "
+                         "variance computed as mean(x**2) - mean(x)**2 cancels catastrophically "
+                         "(and can go negative). Compute the mean first, then the variance as the "
+                         "mean of (x - mean)**2 in a second pass, accumulating in float64.",
+                         evidence)
+    pt = pattern_tag(rep.results)
+    if pt and (rep.level.name, pt[0]) in LEVEL_TAG_FIX:
+        return Directive(f"numeric:tag:{pt[0]}", LEVEL_TAG_FIX[rep.level.name, pt[0]], evidence)
     if any(r.status == "nonfinite" for r in fails):
         return Directive("numeric:nonfinite",
                          "Some outputs are nan or inf although the true answer is finite. Find "
@@ -139,7 +176,6 @@ def _numeric(rep):
                          "in float64: create accumulators with dtype=np.float64 and convert only "
                          "the final result.", evidence)
 
-    facts, _ = common_facts(fails)
     fact = lambda s: any(s in f for f in facts)
     const = next((f.rsplit(" ", 1)[1] for f in facts if f.startswith("every wrong output is exactly")), None)
     tile_only = next((f for f in facts if "column tile only" in f), None)
@@ -174,6 +210,21 @@ def _numeric(rep):
                          "The last, partial K tile is left out of the sum. Loop "
                          "`for k0 in range(0, K, step)` with `k1 = min(k0 + step, K)` and use "
                          "its real size k1 - k0, so every k in 0..K-1 contributes.", evidence)
+    if fact("result for window w - 1") or fact("result for window w + 1"):
+        return Directive("numeric:band-edge",
+                         "The window has the wrong width: it must include both edges, j from "
+                         "max(0, i - w) to min(S - 1, i + w) inclusive (2w + 1 keys away from the "
+                         "sequence ends).", evidence)
+    if fact("one-sided (causal) window"):
+        return Directive("numeric:one-sided",
+                         "The window is two-sided: include keys after the query (j up to "
+                         "min(S - 1, i + w)) as well as before it (j down to max(0, i - w)).",
+                         evidence)
+    if fact("the dilation is ignored"):
+        return Directive("numeric:dilation",
+                         "The dilation is ignored. Tap k of output t reads "
+                         "x[c, t*stride + k*dilation], so the slice for tap k starts at "
+                         "t0*stride + k*dilation.", evidence)
     if fact("copied without transposing"):
         return Directive("numeric:not-transposed",
                          "Wrong outputs hold x[r, c] at out[r, c]: the data was copied, not "
@@ -195,7 +246,6 @@ def _numeric(rep):
                              f"the full size with end = min(start + {T}, size), and use the "
                              f"tile's real size end - start (never a fixed {T}) in every inner "
                              f"loop and slice.", evidence)
-    pt = pattern_tag(rep.results)
     if pt and pt[0] in TAG_FIX:
         return Directive(f"numeric:tag:{pt[0]}", TAG_FIX[pt[0]], evidence)
     if const is not None:

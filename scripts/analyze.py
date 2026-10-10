@@ -109,6 +109,9 @@ def main():
     for spec in a.arms:
         label, path = spec.split("=", 1)
         arms[label] = load(path)
+    for label, (_, res) in arms.items():
+        versions = sorted({r.get("version", "?") for r in res})
+        print(f"{label}: code version(s) {versions}" + ("  <-- MIXED" if len(versions) > 1 else ""))
     table = summarise(arms)
     print_tables(table)
     if a.tex:

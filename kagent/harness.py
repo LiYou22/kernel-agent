@@ -109,12 +109,13 @@ class Report:
         lines = [f"{len(fails)}/{len(self.results)} cases wrong."]
         for pat in filter(None, [_pattern(self.results), _common_facts(fails)]):
             lines.append(f"Pattern: {pat}.")
-        errs = {}
+        errs = {}  # same exception type at the same line is one crash, whatever the shapes
         for r in fails:
             if r.status in ("error", "timeout"):
-                errs.setdefault(r.msg, []).append(r.case.name)
-        for msg, names in errs.items():
-            lines.append(f"Crash in {len(names)} case(s) (e.g. '{names[0]}'): {msg}")
+                where = r.msg[r.msg.rfind(" at line "):] if " at line " in r.msg else ""
+                errs.setdefault((r.msg.split(":")[0], where), []).append(r)
+        for rs in errs.values():
+            lines.append(f"Crash in {len(rs)} case(s) (e.g. '{rs[0].case.name}'): {rs[0].msg}")
         shown = [r for r in sorted(fails, key=lambda r: -r.worst) if r.status not in ("error", "timeout")]
         for r in _diverse(shown, max_cases):
             lines.append(f"- '{r.case.name}': {r.msg}")

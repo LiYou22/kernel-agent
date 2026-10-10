@@ -14,10 +14,16 @@ def run(level, path):
     return verify(LEVELS[level], (K / path).read_text())
 
 
+def level_of(path):
+    return int(Path(path).name[1:].split("_")[0])
+
+
 @pytest.mark.parametrize("level,path", [(1, "hand/l1_relu_affine.py"), (2, "hand/l2_row_sum.py"),
                                         (3, "hand/l3_row_max.py"), (4, "hand/l4_rmsnorm.py"),
                                         (5, "hand/l5_softmax.py"), (6, "hand/l6_transpose.py"),
-                                        (7, "hand/l7_matmul.py")])
+                                        (7, "hand/l7_matmul.py"), (8, "hand/l8_layernorm.py"),
+                                        (8, "hand/l8_layernorm_f32_two_pass.py"),
+                                        (9, "hand/l9_band_attention.py"), (10, "hand/l10_conv1d.py")])
 def test_correct_kernels_pass(level, path):
     rep = run(level, path)
     assert rep.passed, rep.text()
@@ -53,6 +59,14 @@ BROKEN = [
     (6, "l6_tile_origin.py", set(), "'multi-row-tile'"),
     (7, "l7_drop_k_tail.py", set(), "'partial-k-tile'"),
     (7, "l7_matmul_operator.py", {"whole-array", "matmul-op"}, None),
+    (8, "l8_naive_variance.py", set(), "mean is large compared to their spread"),
+    (9, "l9_band_edge.py", set(), "negative dimensions"),
+    (9, "l9_causal.py", set(), "one-sided (causal) window"),
+    (9, "l9_no_max_subtraction.py", set(), "non-finite"),
+    (10, "l10_ignore_dilation.py", set(), "the dilation is ignored"),
+    # one case's slice comes out length 1 and numpy broadcasts it: a real broadcast violation
+    (10, "l10_lout_off_by_one.py", {"broadcast"}, "ValueError"),
+    (10, "l10_drop_tail.py", set(), "last partial col tile"),
 ]
 
 
@@ -99,6 +113,11 @@ def test_cost_counts_rereads():
     (5, "l5_per_tile_softmax.py", "numeric:per-tile-stat"),
     (6, "l6_skip_partial.py", "numeric:partial-row"),
     (7, "l7_drop_k_tail.py", "numeric:tag:partial-k-tile"),
+    (8, "l8_naive_variance.py", "numeric:cancellation"),
+    (9, "l9_causal.py", "numeric:one-sided"),
+    (9, "l9_no_max_subtraction.py", "numeric:nonfinite"),
+    (10, "l10_ignore_dilation.py", "numeric:dilation"),
+    (10, "l10_drop_tail.py", "numeric:partial-col"),
 ])
 def test_translator_names_the_cause(level, path, key):
     from kagent.translate import translate

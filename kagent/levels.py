@@ -398,4 +398,205 @@ L7 = Level(
     explain=lambda args, g, r, bad: matmul_facts(args, g, bad),
 )
 
-LEVELS = {lv.num: lv for lv in [L1, L2, L3, L4, L5, L6, L7]}
+# ---- level 8: layernorm -------------------------------------------------------------------------
+
+def _layernorm(x, g, b, eps):
+    mu = x.mean(axis=1, keepdims=True)
+    var = ((x - mu) ** 2).mean(axis=1, keepdims=True)
+    return (x - mu) / np.sqrt(var + eps) * g + b
+
+
+def _ln_scale(args, r):
+    # two-pass float32: the mean is off by up to gamma_N * mean|x|, which shifts every x - mu, so
+    # the error relative to sigma grows with mean|x| / sigma (the conditioning of the problem)
+    x, g, b, eps = args
+    mu = x.mean(axis=1, keepdims=True)
+    sigma = np.sqrt(((x - mu) ** 2).mean(axis=1, keepdims=True) + eps)
+    yn = (x - mu) / sigma
+    return np.abs(g) * (np.abs(yn) + np.abs(x).mean(axis=1, keepdims=True) / sigma) + np.abs(b)
+
+
+def layernorm_facts(args, g, bad):
+    """E[x^2] - E[x]^2 fails exactly on rows whose mean is large next to their spread (large-mean
+    and constant rows); a per-row condition ratio names that without guessing at the code."""
+    x = args[0]
+    mu = x.mean(axis=1)
+    ratio = np.abs(x).mean(axis=1) / np.sqrt(((x - mu[:, None]) ** 2).mean(axis=1) + args[3])
+    rows = bad.any(axis=1)
+    if rows.any() and np.all(ratio[rows] >= 30):
+        return ["only rows whose mean is large compared to their spread are wrong (cancellation)"]
+    return []
+
+
+def _l8_extra(x, rng, holdout):
+    N = x.shape[1]
+    g = rng.uniform(0.5, 1.5, N).astype(np.float32)
+    b = rng.uniform(-0.5, 0.5, N).astype(np.float32)
+    return [(" eps=1e-5", (g, b, 1e-5), ())]
+
+
+L8 = Level(
+    8, "layernorm", "kernel(x, g, b, eps)",
+    "Given a 2-D float32 array x of shape (M, N), 1-D float32 arrays g and b of length N and a "
+    "python float eps, return the (M, N) layernorm over the last axis: "
+    "y[i, j] = (x[i, j] - mean_i) / sqrt(var_i + eps) * g[j] + b[j], where mean_i and var_i are "
+    "the mean and the (population) variance of row i.",
+    ref=_layernorm,
+    scale=_ln_scale,
+    bound_k=lambda args: args[0].shape[1] + 6,
+    min_flops=lambda args: 7 * args[0].size,
+    make_cases=lambda h: _cases_2d(["large-mean", "constant-rows", "zeros", "large-magnitude"],
+                                   _l8_extra, seed=8, holdout=h),
+    explain=lambda args, g, r, bad: layernorm_facts(args, g, bad) + rowwise_tile_facts(
+        lambda a, j0, j1: _layernorm(a[0][:, j0:j1], a[1][j0:j1], a[2][j0:j1], a[3]), args, g, bad),
+)
+
+# ---- level 9: banded (windowed) attention -------------------------------------------------------
+
+def _band_attention(q, k, v, w, causal=False):
+    S, d = q.shape
+    s = (q @ k.T) / np.sqrt(d)
+    i, j = np.indices((S, S))
+    keep = (np.abs(i - j) <= w) & ((j <= i) if causal else True)
+    s = np.where(keep, s, -np.inf)
+    p = np.exp(s - s.max(axis=1, keepdims=True))
+    p /= p.sum(axis=1, keepdims=True)
+    return p @ v, p
+
+
+def _attn_scale(args, r):
+    q, k, v, w = args
+    _, p = _band_attention(q, k, v, w)
+    qk = np.abs(q) @ np.abs(k).T / np.sqrt(q.shape[1])
+    spread = np.where(p > 0, qk, 0).max(axis=1, keepdims=True)
+    return (p @ np.abs(v)) * (1 + spread)
+
+
+def attention_facts(args, g, bad):
+    q, k, v, w = args
+    for cand, fact in ((w - 1, "each wrong output equals the result for window w - 1: the band "
+                                "edges |i - j| = w are left out"),
+                       (w + 1, "each wrong output equals the result for window w + 1: the band is "
+                               "one too wide")):
+        if cand >= 0 and np.allclose(g[bad], _band_attention(q, k, v, cand)[0][bad], rtol=1e-4, atol=1e-6):
+            return [fact]
+    if np.allclose(g[bad], _band_attention(q, k, v, w, causal=True)[0][bad], rtol=1e-4, atol=1e-6):
+        return ["each wrong output equals a one-sided (causal) window: keys after the query (j > i) "
+                "are left out"]
+    return []
+
+
+ATT_SHAPES = [(1, 8, 2), (7, 4, 1), (130, 16, 5), (257, 8, 300), (131, 32, 0), (520, 16, 64),
+              (600, 8, 129)]
+
+
+def _cases_attention(holdout):
+    rng = np.random.default_rng(9 + (1000 if holdout else 0))
+    if holdout:
+        shapes = [(int(rng.integers(2, 400)), int(rng.choice([4, 8, 16, 32])), int(rng.integers(0, 80)))
+                  for _ in range(4)] + [(int(rng.integers(130, 300)), 8, 1000)]
+    else:
+        shapes = ATT_SHAPES
+    cases = []
+    for kind in ("normal", "large-magnitude"):
+        for S, d, w in (shapes if kind == "normal" else shapes[2:4]):
+            q, k, v = (rng.standard_normal((S, d)) for _ in range(3))
+            if kind == "large-magnitude":
+                q = q * 300         # scores near 1e3: exp overflows (even in float64) without max subtraction
+            tags = ["multi-row-tile"] if S > TILE_R else []
+            tags += ["w-0"] if w == 0 else []
+            tags += ["w-ge-S"] if w >= S - 1 else []
+            cases.append(Case(f"{kind} S={S} d={d} w={w}",
+                              tuple(a.astype(np.float32) for a in (q, k, v)) + (w,),
+                              tuple(tags) + (kind,)))
+    return cases
+
+
+L9 = Level(
+    9, "band_attention", "kernel(q, k, v, w)",
+    "Given float32 arrays q, k, v of shape (S, d) and a python int w >= 0, return the (S, d) array "
+    "out with out[i] = sum_j p[i, j] * v[j], where j ranges over the window |i - j| <= w (clipped "
+    "to 0..S-1) and p[i, :] = softmax over that window of q[i] . k[j] / sqrt(d). Use a numerically "
+    "stable softmax.",
+    ref=lambda q, k, v, w: _band_attention(q, k, v, w)[0],
+    scale=_attn_scale,
+    bound_k=lambda args: args[0].shape[1] + min(2 * args[3] + 1, args[0].shape[0]) + 8,
+    min_flops=lambda args: 4 * args[0].shape[1] * sum(
+        min(i + args[3], args[0].shape[0] - 1) - max(i - args[3], 0) + 1 for i in range(args[0].shape[0])),
+    make_cases=_cases_attention,
+    explain=lambda args, g, r, bad: attention_facts(args, g, bad),
+    abs_floor=2.0 ** -126,
+)
+
+# ---- level 10: 1-D convolution with stride and dilation -----------------------------------------
+
+def _conv1d(x, wt, stride, dilation):
+    C_in, L = x.shape
+    C_out, _, K = wt.shape
+    L_out = (L - dilation * (K - 1) - 1) // stride + 1
+    out = np.zeros((C_out, L_out))
+    for kk in range(K):
+        cols = x[:, kk * dilation: kk * dilation + stride * (L_out - 1) + 1: stride]   # (C_in, L_out)
+        out += wt[:, :, kk] @ cols
+    return out
+
+
+def conv_facts(args, g, bad):
+    x, wt, stride, dilation = args
+    facts = []
+    if dilation > 1:
+        alt = _conv1d(x, wt, stride, 1)[:, :g.shape[1]]
+        if alt.shape == g.shape and np.allclose(g[bad], alt[bad], rtol=1e-4, atol=1e-6):
+            facts.append("each wrong output equals the result with dilation 1: the dilation is ignored")
+    return facts
+
+
+CONV_CASES = [  # C_in, L, C_out, K, stride, dilation
+    (1, 1, 1, 1, 1, 1), (1, 7, 1, 3, 1, 1), (3, 100, 4, 3, 2, 1), (2, 517, 3, 5, 3, 2),
+    (4, 1031, 2, 4, 1, 3), (3, 61, 5, 7, 4, 10), (2, 1500, 3, 3, 7, 5), (130, 40, 2, 2, 1, 1),
+]
+
+
+def _cases_conv(holdout):
+    rng = np.random.default_rng(10 + (1000 if holdout else 0))
+    if holdout:
+        specs = []
+        for _ in range(6):
+            K, dil, st = int(rng.integers(1, 6)), int(rng.integers(1, 5)), int(rng.integers(1, 6))
+            L = dil * (K - 1) + 1 + int(rng.integers(0, 1200))
+            specs.append((int(rng.integers(1, 6)), L, int(rng.integers(1, 6)), K, st, dil))
+    else:
+        specs = CONV_CASES
+    cases = []
+    for kind in ("normal", "cancelling"):
+        for C_in, L, C_out, K, st, dil in (specs if kind == "normal" else specs[3:5]):
+            x = values(kind, C_in, L, rng)
+            wt = rng.standard_normal((C_out, C_in, K)).astype(np.float32)
+            rf = dil * (K - 1) + 1
+            L_out = (L - rf) // st + 1
+            tags = [f"stride-{'1' if st == 1 else 'gt1'}", f"dilation-{'1' if dil == 1 else 'gt1'}"]
+            tags += ["receptive-field-eq-L"] if rf == L else []
+            tags += ["partial-col-tile"] if L_out % TILE_C else []
+            tags += ["multi-col-tile"] if L_out > TILE_C else []
+            tags += ["multi-row-tile"] if C_in > TILE_R else []
+            cases.append(Case(f"{kind} Cin={C_in} L={L} Cout={C_out} K={K} stride={st} dil={dil}",
+                              (x, wt, st, dil), tuple(tags) + (kind,)))
+    return cases
+
+
+L10 = Level(
+    10, "conv1d", "kernel(x, w, stride, dilation)",
+    "Given a float32 array x of shape (C_in, L), float32 weights w of shape (C_out, C_in, K) and "
+    "python ints stride >= 1 and dilation >= 1, return the (C_out, L_out) cross-correlation with "
+    "no padding: out[o, t] = sum_c sum_k w[o, c, k] * x[c, t*stride + k*dilation], where "
+    "L_out = (L - dilation*(K-1) - 1) // stride + 1.",
+    ref=_conv1d,
+    scale=lambda args, r: _conv1d(np.abs(args[0]), np.abs(args[1]), args[2], args[3]),
+    bound_k=lambda args: args[0].shape[0] * args[1].shape[2] + 1,
+    min_flops=lambda args: 2 * args[1].shape[0] * args[1].shape[1] * args[1].shape[2] * (
+        (args[0].shape[1] - args[3] * (args[1].shape[2] - 1) - 1) // args[2] + 1),
+    make_cases=_cases_conv,
+    explain=lambda args, g, r, bad: conv_facts(args, g, bad),
+)
+
+LEVELS = {lv.num: lv for lv in [L1, L2, L3, L4, L5, L6, L7, L8, L9, L10]}

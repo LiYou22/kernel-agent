@@ -27,6 +27,16 @@ from .harness import verify
 from .levels import LEVELS
 from .translate import Directive, translate
 
+def code_version():
+    """Hash of the agent/harness sources, logged with every result so runs on different pods can
+    be checked to have used the same harness."""
+    h = hashlib.sha1()
+    for f in sorted(Path(__file__).parent.glob("*.py")):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:10]
+
+
+VERSION = code_version()
 ANSWER_TOKENS = 3000   # room reserved for the reply; the rest of the context is the prompt budget
 SECTIONS = ("task", "code", "feedback", "ledger")
 
@@ -174,6 +184,7 @@ class Result:
     keys: list = field(default_factory=list)
     mode: str = "ours"
     wording: int = 0
+    version: str = VERSION
 
 
 def _rank(rep):
@@ -321,7 +332,7 @@ def main(argv=None):
         for run in range(a.repeat):
             for n in a.levels:
                 lv = LEVELS[n]
-                print(f"\n=== run {run + 1}/{a.repeat}  level {n}: {lv.name} ===")
+                print(f"\n=== run {run + 1}/{a.repeat}  level {n}: {lv.name}  [{a.mode}, v{VERSION}] ===")
                 model = ScriptedModel(script[str(n)]) if script else LiveModel(a.temperature, a.think)
                 results.append(solve(lv, model, run, a.attempts, a.samples, a.patience, log,
                                      mode=a.mode, wording=0 if a.same_wording else run))
@@ -336,7 +347,7 @@ def main(argv=None):
         att = sum(r.attempts for r in ok) / len(ok) if ok else float("nan")
         print(f"  L{n} {LEVELS[n].name:12s} verified {len(ok)}/{len(rs)}  "
               f"mean attempts when verified {att:.1f}  statuses {[r.status for r in rs]}")
-    print(f"log: {out}")
+    print(f"log: {out}  (code version {VERSION})")
 
 
 if __name__ == "__main__":
