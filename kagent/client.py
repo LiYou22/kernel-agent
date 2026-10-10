@@ -62,15 +62,17 @@ def count_tokens(messages, think=False):
     return _post("/tokenize", body, 30)["count"]
 
 
-def chat(messages, max_tokens=4000, temperature=0.6, seed=0, think=False, use_cache=True):
+def chat(messages, max_tokens=4000, temperature=0.6, sample=0, think=False, use_cache=True):
+    """`sample` only distinguishes cache entries. A per-request `seed` would make this reproducible,
+    but on Neuron vLLM it kills the engine (no device RNG generator), so it is never sent."""
     prompt_tokens = count_tokens(messages, think)
     budget = min(max_tokens, CONTEXT - prompt_tokens - 16)
     if budget < MIN_ANSWER:
         raise ValueError(f"prompt is {prompt_tokens} tokens; only {budget} left for the answer")
     body = {"model": MODEL, "messages": messages, "max_tokens": budget,
-            "temperature": temperature, "top_p": 0.95, "seed": seed,
+            "temperature": temperature, "top_p": 0.95,
             "chat_template_kwargs": {"enable_thinking": think}}
-    key = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:24]
+    key = hashlib.sha256(json.dumps([body, sample], sort_keys=True).encode()).hexdigest()[:24]
     path = CACHE_DIR / f"{key}.json"
     if use_cache and path.exists():
         return Reply(**{**json.loads(path.read_text()), "cached": True})

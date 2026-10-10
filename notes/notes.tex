@@ -8,6 +8,7 @@
 \usepackage{amsmath}
 \usepackage{enumitem}
 \setlist{nosep,leftmargin=*}
+\emergencystretch=2em
 
 \lstset{basicstyle=\ttfamily\small,columns=fullflexible,breaklines=true,
   frame=single,rulecolor=\color{black!25},backgroundcolor=\color{black!3},
@@ -256,6 +257,148 @@ Level & Qwen3-8B (sampling, 5 runs) & gpt-oss-20b (greedy, 3 runs) \\
 Consequences for us: terse generation prompts, a ledger of failed attempts so a retry is never
 a resend, \code{finish\_reason} checked and ``empty answer'' counted as its own failure class,
 and every reported number given as a rate over repeats.
+
+%==============================================================================
+\section{Reading of the existing agent (\code{projects/02-kernel-agent/agent.py})}
+\label{sec:existing}
+
+The seat pod ships a working agent for the NKI (Stage~B) version of this problem: 657 lines,
+Qwen3-8B, never solved levels 1, 3 or 4. We read it to reuse what it learned and to avoid its
+blind spots. The numbers in \S\ref{sec:external} come from it.
+
+\subsection{Architecture}
+
+\begin{tabularx}{\linewidth}{@{}lY@{}}
+\toprule
+Part & What it does \\
+\midrule
+controller & \code{main()}: levels 1--4, \code{--repeat N} prints per-level solve rate, best,
+  worst, mean \\
+generator & \code{ask()}: \code{chat/completions}, \code{temperature=0.6}, \code{top\_p=0.95},
+  \code{enable\_thinking=False}; \code{--samples} requests in parallel threads \\
+checker & \code{grade()}: parse $\to$ static rules (\code{nkibench.check\_rules}) $\to$ load
+  $\to$ \code{nki.simulate} per shape $\to$ roofline \\
+loop & \code{solve()}: the feedback string becomes the next prompt \\
+log & every attempt appended to \code{attempts.jsonl} (reward, parts, prompt/reply chars, code,
+  feedback) \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Reward shaping}
+
+\[
+  r = 0.1\,[\text{parses}] + 0.2\,[\text{rules}] + 0.2\,[\text{runs}]
+      + 0.5\cdot\frac{\#\text{shapes passed}}{\#\text{shapes}}
+\]
+where \emph{runs} becomes true once any shape simulates without raising. Therefore:
+\begin{itemize}
+  \item $r=0.30$: parses and obeys the rules, but \emph{every} shape raised an exception.
+  \item $r=0.50$: it runs, and every shape is numerically wrong.
+  \item $r=0.625$: one of four shapes is correct (the level-4 ceiling in \S\ref{sec:external}).
+\end{itemize}
+\textbf{Discrepancy we found:} the README's ``how to read your run'' table says 0.30 means ``rules
+clean and it ran, but the numbers are wrong''. The code says 0.30 means it never ran. So
+``levels 1 and 3 always 0.30'' is a wall of \emph{crashes} (API misuse in the simulator), not of
+wrong numerics. That changes what you would try next.
+
+\subsection{Prompting}
+\begin{itemize}
+  \item \code{first\_prompt(level, terse)}: three lengths. \code{terse=0} carries the reference
+        source, hardware limits, a $\sim$200-token API card and a complete worked copy kernel;
+        \code{terse=2} is one sentence plus the reference. No rules list at any length: rules live
+        in the checker.
+  \item \code{repair\_prompt}: previous code + checker feedback + ``change exactly what the
+        checker names and keep everything else identical''. The reference is not re-sent.
+\end{itemize}
+
+\subsection{Feedback: verdict to instruction}
+\begin{itemize}
+  \item \code{grade()} returns an instruction string, never a bare verdict. Missing entry point
+        $\to$ the exact \code{def} line to write. Invented module $\to$ the three imports that
+        exist.
+  \item \code{enrich()}: about 14 regexes over simulator exception text, each appending a concrete
+        fix (e.g.\ ``MemoryRegion not callable'' $\to$ use
+        \code{nl.ndarray(..., buffer=nl.sbuf)}; partition dim $>128$ $\to$ loop in chunks with
+        \code{min(limit, size)}).
+  \item \code{available\_names()}: on \code{has no attribute X}, list the closest real names
+        (difflib). Born from the model guessing a new fake name every round.
+  \item Numeric failures report only the \emph{first} failing shape (\code{"On \{label\}:
+        \{first\}"}), via \code{describe\_mismatch}.
+\end{itemize}
+
+\subsection{Loop control}
+\begin{itemize}
+  \item Best of $n$ samples per round, by reward.
+  \item \textbf{Repair the latest attempt, not the best.} Repairing the best with its own feedback
+        is a fixed point: once a round scores worse the prompt stops changing, and greedy decoding
+        then repeats forever (measured: stuck at 0.10 for four rounds).
+  \item Same feedback twice in a row $\to$ append a ledger of failed feedback strings
+        (160 chars each) to break the repeat.
+  \item Any one feedback string seen \code{--give-up-after} (4) times $\to$ stop the level and
+        print the failure cycle.
+  \item No code at all $\to$ escalate terseness and re-ask from scratch.
+  \item Truncation and empty answers are printed as notices so a budget problem doesn't look like
+        a model failure.
+\end{itemize}
+
+\subsection{What we keep, and what we change}
+
+\begin{tabularx}{\linewidth}{@{}YY@{}}
+\toprule
+Existing agent & Ours \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Keep}} \\
+rules out of the prompt; one named change per repair & same \\
+repair the latest, not the best & same \\
+\code{--repeat N}, solve rates & same; plus a confidence per level \\
+thinking off; terse escalation on empty answers & same \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Change}} \\
+tokens estimated as chars/4; no breakdown & exact counts from the server's \code{/tokenize};
+  per-attempt split into task / code / feedback / ledger \\
+numeric feedback: first failing shape only & cross-case pattern (tags), common facts, two
+  diverse worst cases \\
+error-to-instruction via regexes on exception text & every violation kind has a \code{FIX}
+  instruction; numeric diagnosis $\to$ instruction is the next layer \\
+repeat detection on exact feedback strings (numbers differ $\to$ cycles missed) & key on
+  failure class (violation kinds, case-tag pattern), not text \\
+truncated reply with partial code reaches the compiler as ``does not parse'' & a truncated or
+  empty reply never reaches the checker; it changes the prompt \\
+all violations listed in one repair & order violations; one change per round when they interact \\
+no confidence output & calibrated confidence per level (required by the scoring) \\
+\bottomrule
+\end{tabularx}
+
+%==============================================================================
+\section{Infrastructure notes}
+
+\entry{E5: a per-request \code{seed} kills the model server}{2026-10-10}
+Our first call sent \code{"seed": 0} for reproducible sampling. On Neuron vLLM this tries to
+create a device RNG generator (\code{PrivateUse1HooksInterface ... getNewGenerator}), the
+EngineCore dies, and every later request returns 500, then connection refused. The client never
+sends \code{seed} now; cache entries are keyed by a local sample index instead. The server was
+restarted with \code{./serve.sh}. Collateral damage: a concurrent \code{agent.py --repeat 5}
+benchmark run sharing the server died at the same instant (its \code{run.log} last written
+15:02:48.68, the engine crash at 15:02:48) with ``HTTP 500 EngineCore encountered an issue''. Lesson:
+the model server is shared state; probe new request parameters on a server nobody else is using.
+
+\begin{itemize}
+  \item \code{max-model-len 8192} on vLLM is input $+$ output. With a 2500-token answer budget
+        the prompt must stay under about 5.7k tokens, tighter than the challenge's ``8192 input''.
+  \item \code{kubectl port-forward} is forbidden for workshop credentials, so agent runs happen
+        in the pod: \code{scripts/sync.sh} pushes tracked files to \code{/workspace/stageA}.
+  \item Harness tests pass in the pod too (Python 3.13, NumPy 2.4.6).
+\end{itemize}
+
+\entry{E6: first model call, level 1}{2026-10-10}
+One-sentence prompt (task + signature + ``tiles of at most $128\times512$, last tile may be
+smaller'' + ``one python block''): 107 prompt tokens, 180 completion tokens, 13\,s,
+\code{finish\_reason=stop}, no reasoning text (thinking off). The kernel tiles correctly and is
+numerically right on 40/40 cases, but starts with \code{x = np.asarray(x, dtype=np.float32)},
+which the harness rejects (\code{escape}, line 5), so it scores zero. Exactly the pattern of the
+challenge's worked example: generate freely, and the verifier finds the one thing to repair. The
+repair instruction exists (``Remove \code{np.asarray}; work directly on slices''); sending it back
+is the next step.
 
 %==============================================================================
 \section{Open decisions and next steps}
