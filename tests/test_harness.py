@@ -139,4 +139,12 @@ def test_rownorm_broadcast_gets_the_column_loop(path, key):
     # layout fix showed a transpose loop; both must now point at the per-column form
     from kagent.translate import translate
     d = translate(run(4, "broken/" + path))
-    assert d.key == key and "out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]" in d.instruction, d.instruction
+    assert d.key == key and "out[i0:i1, j] = x[i0:i1, j] * rinv" in d.instruction, d.instruction
+
+
+def test_judge_directive_maps_the_organizers_failures():
+    from kagent.translate import judge_directive
+    lv = LEVELS[4]
+    assert judge_directive(lv, "RAISED: TypeError: kernel() missing 1 required positional argument: 'g'").key == "judge:signature"
+    assert judge_directive(lv, "large x: NUMERICAL MISMATCH: worst relative error 0.0008").key == "judge:precision"
+    assert "kernel(x, eps=1e-6)" in judge_directive(lv, "RAISED: TypeError: x").instruction

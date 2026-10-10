@@ -120,9 +120,9 @@ def _first_sentence_of(msg):
 # a layout violation, then the crash again), and the generic layout fix showed a *transpose* loop.
 # The only legal form is one column at a time, with the per-row vector and a scalar per column.
 ROWNORM_COLUMN = {
-    "rmsnorm": "out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]",
+    "rmsnorm": "out[i0:i1, j] = x[i0:i1, j] * rinv",
     "softmax": "out[i0:i1, j] = np.exp(x[i0:i1, j] - m) / s",
-    "layernorm": "out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv * g[j] + b[j]",
+    "layernorm": "out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv",
 }
 
 
@@ -164,6 +164,30 @@ def crash_fix(msg, level_name=None):
                 "the window or tile bounds so that start <= end, and handle an empty range without "
                 "allocating.")
     return None
+
+
+def judge_directive(level, message):
+    """The organizers' checker failed a kernel our harness accepted: one instruction for why."""
+    first = message.splitlines()[0]
+    if "RAISED" in message and ("positional argument" in message or "TypeError" in message):
+        return Directive("judge:signature",
+                         f"The kernel must be callable exactly as `{level.signature}`, i.e. with the "
+                         f"input arrays only (keyword arguments keep their defaults). Use that "
+                         f"signature.", first)
+    if "NON-FINITE" in message:
+        return Directive("judge:nonfinite", "Some outputs are nan or inf on the final check: a step "
+                         "overflows. Subtract the row maximum before exp, and accumulate in float64.",
+                         first)
+    if "WRONG SHAPE" in message:
+        return Directive("judge:shape", f"Wrong output shape on the final check: {first}", first)
+    if "RULES" in message:
+        return Directive("judge:rules", f"The final check found a banned call: {first}. Replace it "
+                         f"with an explicit loop over columns.", first)
+    return Directive("judge:precision",
+                     "Correct logic, but the final check needs every output within 1e-4 relative "
+                     "error, including outputs close to zero. Compute in float64: cast each slice "
+                     "with .astype(np.float64) before multiplying or adding, keep accumulators in "
+                     "float64, and convert only the final result.", first)
 
 
 def translate(rep):
@@ -297,9 +321,11 @@ def _numeric(rep):
                          "overflows for these inputs. " + remedy, evidence)
     if all(r.worst < ROUNDING_CEILING for r in fails):
         return Directive("numeric:precision",
-                         "The logic is right but float32 rounding error is too large. Accumulate "
-                         "in float64: create accumulators with dtype=np.float64 and convert only "
-                         "the final result.", evidence)
+                         "The logic is right but float32 rounding is too large: every output must be "
+                         "within 1e-4 relative error, including outputs close to zero. Compute in "
+                         "float64: cast each slice with .astype(np.float64) before multiplying or "
+                         "adding, keep accumulators in float64, and convert only the final result.",
+                         evidence)
 
     fact = lambda s: any(s in f for f in facts)
     const = next((f.rsplit(" ", 1)[1] for f in facts if f.startswith("every wrong output is exactly")), None)

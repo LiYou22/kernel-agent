@@ -1,7 +1,9 @@
 import numpy as np
 
 
-def kernel(x, g, b, eps):
+def kernel(x, eps=1e-5):
+    g = np.ones(x.shape[1], dtype=np.float32)
+    b = np.zeros(x.shape[1], dtype=np.float32)
     M, N = x.shape
     out = np.empty((M, N), dtype=np.float32)
     for i0 in range(0, M, 128):

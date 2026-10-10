@@ -25,7 +25,8 @@ from . import client
 from .extract import extract_code
 from .harness import verify
 from .levels import LEVELS
-from .translate import Directive, translate
+from . import judge
+from .translate import Directive, judge_directive, translate
 
 def code_version():
     """Hash of the agent/harness sources, logged with every result so runs on different pods can
@@ -252,7 +253,12 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             continue
 
         r, src, rep = max(cands, key=lambda c: _rank(c[2]))
+        judge_fail = None
         if rep.passed:
+            ok, jmsg = judge.check(level.num, src)
+            if not ok:
+                judge_fail = judge_directive(level, jmsg)
+        if rep.passed and judge_fail is None:
             hold = verify(level, src, holdout=True, timeout_s=HOLDOUT_TIMEOUT_S)
             status, conf = ("verified", 0.95) if hold.passed else ("dev-only", 0.3)
             _log(log, Attempt(**base, outcome="pass", summary=rep.summary(), code=src))
@@ -262,8 +268,8 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             _log(log, res)
             return res
 
-        directive = translate(rep)  # in naive mode only the key is used, for the taxonomy
-        report_text = rep.text()
+        directive = judge_fail or translate(rep)  # naive mode uses only the key, for the taxonomy
+        report_text = rep.text() if judge_fail is None else f"{rep.summary()}\nFinal check: {judge_fail.evidence}"
         repeat_code = _code_hash(src) in seen_hashes
         seen_hashes.add(_code_hash(src))
         note = ("Your last reply repeated an earlier version unchanged, so the change was not "
