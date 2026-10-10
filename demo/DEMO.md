@@ -91,9 +91,12 @@ uv run python -m kagent.harness 1 demo/l1_naive_attempt1.py
 | level 1 (relu) | runs verified | attempts when verified |
 |---|---|---|
 | ours | 5/5 | 1.6 |
-| naive | 1/3 so far, the other 2 stuck on the same violation | 1.0 |
+| naive | 3/5, the other 2 stuck on the same violation | 1.7 |
 
-(Source: notes E18, E21. Final naive numbers: `scripts/analyze.py`.)
+Across levels 1-4 (5 runs each, same harness version): **ours 15/20, naive 4/20**
+(L1 5/5 vs 3/5, L2 4/5 vs 0/5, L3 5/5 vs 1/5, L4 1/5 vs 0/5).
+
+(Source: notes E24, `scripts/analyze.py` on `results/seat-130/`.)
 
 ## 4. Does the agent know when it failed? (1 min)
 
