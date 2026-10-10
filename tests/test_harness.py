@@ -124,3 +124,9 @@ def test_cost_counts_rereads():
 def test_translator_names_the_cause(level, path, key):
     from kagent.translate import translate
     assert translate(run(level, "broken/" + path)).key == key
+
+
+def test_numpy_alias_on_an_unreached_branch_is_caught():
+    # red team, PR #2: `xp = np; xp.max` on a branch the tests never take passed with 0 violations
+    rep = run(3, "redteam/l3_unreached_alias_max.py")
+    assert not rep.passed and any(v.kind == "max-like" for v in rep.violations), rep.text()
