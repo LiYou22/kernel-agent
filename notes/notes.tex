@@ -705,6 +705,26 @@ crashes at partial tiles (L5, L6, L7), floating point and accumulator errors (L4
 error it was shown but lowered the number of passing cases in 24 of 91 \code{ours} repairs (26\%) and
 5 of 30 \code{naive} repairs (17\%): our repairs make bigger moves, which also break more.
 
+\entry{E23: v3, built from what the live runs taught us (branch \code{v3}, version \code{ea9befddac})}{2026-10-10}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Change & Why & Evidence \\
+\midrule
+Structural directives say ``rewrite the loop structure as needed'' & a ``change only that'' prompt blocks fixes that need loops rebuilt & E17 (NKI L4: 72/80 attempts) \\
+One remedy per directive (float64 only; softmax: subtract the max) & a second remedy invited \code{np.max} & E13 (L4 run 1, attempt 8) \\
+Crash directives name the fix (index past a partial tile, shape mismatch, array into an element, negative size) & L5/L6 stuck on three identical crashes & E21 \\
+12 attempts instead of 8 & L4 runs 1--2 ran out at 8; the solved run needed 6 & E18 \\
+Holdout timeout 120\,s (dev stays 20\,s) & a correct per-element matmul was labelled dev-only & E21 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+61 self-tests pass, including two new ones (structural prompt; crash directive). v3 lives on branch
+\code{v3} so that \code{main} keeps version \code{e22ccab872} while the frozen v2 arms run. It will be
+run as a separate \code{ours-v3} arm on the walls (L4--L6) when a pod is free, and compared with v2
+on the same levels: if the changes help, the solve rate there should move; if not, they are reverted,
+as the upstream team did with an improvement that measured worse.
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices

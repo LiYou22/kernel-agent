@@ -14,7 +14,7 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 14:55 EDT)
+## Status and open items (updated 15:00 EDT)
 
 **Running on seat-130** (code version `e22ccab872`; every result logs its version):
 `ours` L1–4 done (L1 5/5, L2 4/5, L3 5/5, L4 1/5); `naive` L1–4 and `ours` L5–7 running since
@@ -45,10 +45,12 @@ Check that the first log line shows `ve22ccab872`; anything else is not comparab
 **Open work, in order**
 
 - **A. Deliverables: done** (eval set, real token plot, taxonomy, reproduction note).
-- **B. v3 agent (130, after A)**: structural directives ask for a loop rewrite (notes E17); one
-  remedy per directive (E13); crash-specific directives (E21); 12 attempts instead of 8; holdout
-  timeout that separates slow from wrong. Tested locally only; deployed as a separate `ours-v3`
-  arm on L4–L6 when a pod is free, so the frozen v2 comparison stays clean.
+- **B. v3 agent: ready on branch `v3`** (code version `ea9befddac`, 61 tests pass; notes E23):
+  structural directives ask for a loop rewrite (E17); one remedy per directive (E13); crash-specific
+  directives (E21); 12 attempts; 120 s holdout timeout. **`main` stays on v2 (`e22ccab872`)** so the
+  running v2 arms stay comparable. To run it on a free pod (planned: `ours` on L4–L6):
+  `git switch v3 && scripts/sync.sh && scripts/launch.sh ours 4 5 6`, then `git switch main`. Its
+  logs carry version `ea9befddac`, which is how the analysis tells it apart from v2.
 - **C. Final analysis and demo (from ~16:00, when the v2 slices finish)**:
   `scripts/analyze.py ... --recheck` for the final tables and calibration (slow vs wrong);
   `scripts/opt_report.py` for the efficiency figure; demo script.
