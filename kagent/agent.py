@@ -32,7 +32,8 @@ def code_version():
     be checked to have used the same harness."""
     h = hashlib.sha1()
     for f in sorted(Path(__file__).parent.glob("*.py")):
-        h.update(f.read_bytes())
+        if not f.name.startswith("."):  # macOS tar can leave ._*.py AppleDouble files on a pod
+            h.update(f.read_bytes())
     return h.hexdigest()[:10]
 
 
