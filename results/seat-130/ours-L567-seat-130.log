@@ -2,3 +2,47 @@
 === run 1/5  level 5: softmax  [ours, ve22ccab872] ===
 L5 #1 in=125 [task=113] out=183 14.2s  FAIL rule:sum-like
       -> Replace `np.sum` with an explicit python loop over the columns of the tile that accumulates into a 1-D array of length (i1 - i0): acc = np.zeros(i1 - i0); fo...
+L5 #2 in=397 [task=86 code=182 feed=116] out=236 18.6s  FAIL crash:IndexError
+      -> The kernel raises IndexError: index 512 is out of bounds for axis 1 with size 188 at line 20 `acc += np.exp(tile[:, col] - max_tile[:, 0])`
+L5 #3 in=452 [task=86 code=235 feed=118] out=504 39.6s  FAIL crash:IndexError
+      -> The kernel raises IndexError: index 512 is out of bounds for axis 1 with size 188 at line 25 `acc += np.exp(tile[row, col] - max_tile[row, 0])`
+L5 #4 in=580 [task=86 code=281 feed=120 ledg=80] out=482 37.8s  FAIL crash:IndexError
+      -> The kernel raises IndexError: index 512 is out of bounds for axis 1 with size 188 at line 24 `acc += np.exp(tile[row, col] - max_tile[row, 0])`
+   STUCK: 'crash:IndexError' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 4 attempt(s), 1554 in / 1405 out tokens
+
+=== run 1/5  level 6: transpose  [ours, ve22ccab872] ===
+L6 #1 in=112 [task=100] out=136 10.8s  FAIL rule:layout
+      -> Remove `.T`
+L6 #2 in=291 [task=73 code=135 feed=70] out=150 12.2s  FAIL crash:ValueError
+      -> The kernel raises ValueError: could not broadcast input array from shape (0,) into shape (188,) at line 15 `y[j:end_j, r] = tile[r - i, j:end_j]`
+L6 #3 in=355 [task=73 code=149 feed=120] out=283 22.1s  FAIL crash:ValueError
+      -> The kernel raises ValueError: could not broadcast input array from shape (0,) into shape (188,) at line 17 `y[j:end_j, r] = tile[r - i, j:end_j]`
+L6 #4 in=416 [task=73 code=160 feed=120 ledg=50] out=402 31.9s  FAIL crash:ValueError
+      -> The kernel raises ValueError: could not broadcast input array from shape (0,) into shape (188,) at line 19 `y[j:end_j, r] = tile[r - i, j:end_j]`
+   STUCK: 'crash:ValueError' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 4 attempt(s), 1174 in / 971 out tokens
+
+=== run 1/5  level 7: matmul  [ours, ve22ccab872] ===
+L7 #1 in=126 [task=114] out=259 20.6s  PASS dev; holdout 7/10
+   => dev-only (confidence 0.30) after 1 attempt(s), 126 in / 259 out tokens
+
+=== run 2/5  level 5: softmax  [ours, ve22ccab872] ===
+L5 #1 in=117 [task=105] out=298 23.5s  FAIL rule:escape
+      -> Remove `np.asarray`; work directly on slices of the input arrays
+L5 #2 in=444 [task=86 code=297 feed=48] out=660 51.3s  FAIL rule:sum-like
+      -> Replace `np.sum` with an explicit python loop over the columns of the tile that accumulates into a 1-D array of length (i1 - i0): acc = np.zeros(i1 - i0); fo...
+L5 #3 in=489 [task=86 code=275 feed=115] out=332 26.2s  FAIL rule:max-like
+      -> Replace `np.max` with an explicit python loop over the columns of the tile: start from acc = np.full(i1 - i0, -np.inf) (use +np.inf for a min) and do acc = n...
+L5 #4 in=531 [task=86 code=331 feed=101] out=388 30.5s  FAIL rule:layout
+      -> Remove `np.newaxis`
+L5 #5 in=588 [task=86 code=387 feed=102] out=470 36.9s  FAIL numeric:per-tile-stat
+      -> Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile alone
+L5 #6 in=833 [task=86 code=469 feed=265] out=736 57.7s  FAIL numeric:per-tile-stat
+      -> Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile alone
+L5 #7 in=840 [task=86 code=494 feed=201 ledg=46] out=743 58.2s  FAIL numeric:per-tile-stat
+      -> Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile alone
+   STUCK: 'numeric:per-tile-stat' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 7 attempt(s), 3842 in / 3627 out tokens
+
+=== run 2/5  level 6: transpose  [ours, ve22ccab872] ===

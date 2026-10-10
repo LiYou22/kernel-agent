@@ -648,6 +648,28 @@ L3 0/5 (0.30), L4 0/5 (0.62). The teammate's baseline (\code{upstream-nki/}) had
 variance; this run shared its server with our benchmark, which may explain the one divergent L2 run
 (not tested).
 
+\entry{E21: first naive-arm and L5--7 results, and a holdout that measured speed}{2026-10-10}
+Seat-130 runs \code{naive} L1--4 and \code{ours} L5--7 since 18:20 UTC (same version).
+\begin{itemize}
+  \item \textbf{naive, run 1}: L1 stuck after 3 attempts (ours: 5/5 at 1.6 attempts), L2 stuck after 6,
+        L3 verified in 7. At L1 the verbatim report (``line 5 \dots: np.asarray [escape]'') was sent
+        back and the model reproduced the same violation until the stopping rule fired: exactly the
+        challenge's warning, and the first direct evidence for translating verdicts into instructions.
+  \item \textbf{ours L5 softmax and L6 transpose, run 1: stuck on crashes} (\code{IndexError},
+        \code{ValueError}, three in a row). The crash directive only restates the exception and the
+        cases; unlike the numeric and rule directives it names no fix. Planned for v3: crash-specific
+        diagnosis (index past a partial tile, shape mismatch in an assignment) with the line to write.
+  \item \textbf{ours L7 matmul, run 1: correct on the first attempt but ``dev-only''}. Holdout failed on
+        3 large shapes (e.g.\ $163{\times}456 \cdot 456{\times}386$) by the 20\,s per-case timeout: a
+        per-element triple loop is correct but slow. \code{analyze.py --recheck} re-runs holdout of every
+        dev-only kernel with a long timeout and labels it \code{slow-but-correct} or \code{wrong-on-holdout}
+        (the benchmark itself is unchanged); this one is slow-but-correct, 10/10. Confidence 0.3 was too
+        low here; calibration must separate slow from wrong.
+\end{itemize}
+Planned for v3, after this round (the harness stays frozen while the arms run): structural directives
+ask for a loop rewrite (E17), one remedy per directive (E13), crash-specific directives, 12 attempts
+instead of 8 (L4 runs 1--2 ran out at 8), and a holdout timeout that distinguishes slow from wrong.
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices

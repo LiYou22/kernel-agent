@@ -54,6 +54,25 @@ def summarise(arms):
     return table
 
 
+def recheck_dev_only(arms, timeout_s=600.0):
+    """A 'dev-only' verdict means the kernel failed holdout. Holdout shapes are larger, so a correct
+    but very slow kernel (per-element triple loops) can fail by the 20 s per-case timeout alone.
+    Re-run holdout with a long timeout to tell 'slow' from 'wrong'; the benchmark itself is unchanged."""
+    from kagent import harness
+    from kagent.levels import LEVELS
+    old = harness.CASE_TIMEOUT_S
+    harness.CASE_TIMEOUT_S = timeout_s
+    try:
+        for label, (_, res) in arms.items():
+            for r in res:
+                if r["status"] == "dev-only" and r.get("code"):
+                    h = harness.verify(LEVELS[r["level"]], r["code"], holdout=True)
+                    r["recheck"] = "slow-but-correct" if h.passed else "wrong-on-holdout"
+                    print(f"recheck {label} L{r['level']} run{r['run']}: {r['recheck']} ({h.summary()})")
+    finally:
+        harness.CASE_TIMEOUT_S = old
+
+
 def efficiency(arms):
     """Roofline metrics of every verified kernel, re-measured from its code (dev, largest case)."""
     from kagent.levels import LEVELS
@@ -153,6 +172,8 @@ def main():
     ap.add_argument("arms", nargs="+", help="label=path.jsonl")
     ap.add_argument("--tex")
     ap.add_argument("--eff-tex", help="also write the efficiency table here")
+    ap.add_argument("--recheck", action="store_true",
+                    help="re-run holdout of dev-only kernels with a long timeout (slow vs wrong)")
     a = ap.parse_args()
     arms = {}
     for spec in a.arms:
@@ -161,6 +182,8 @@ def main():
     for label, (_, res) in arms.items():
         versions = sorted({r.get("version", "?") for r in res})
         print(f"{label}: code version(s) {versions}" + ("  <-- MIXED" if len(versions) > 1 else ""))
+    if a.recheck:
+        recheck_dev_only(arms)
     table = summarise(arms)
     print_tables(table)
     if a.tex:
