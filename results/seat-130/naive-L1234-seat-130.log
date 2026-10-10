@@ -40,3 +40,41 @@ L4 #8 in=835 [task=111 code=230 feed=481] out=524 40.8s  FAIL rule:whole-array
 === run 2/5  level 1: relu_affine  [naive, ve22ccab872] ===
 L1 #1 in=99 [task=87] out=222 16.0s cached  FAIL rule:escape
 L1 #2 in=379 [task=63 code=221 feed=82] out=443 33.3s  FAIL rule:escape
+L1 #3 in=370 [task=63 code=218 feed=76] out=464 36.6s  FAIL rule:escape
+   STUCK: 'rule:escape' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 3 attempt(s), 848 in / 1129 out tokens
+
+=== run 2/5  level 2: row_sum  [naive, ve22ccab872] ===
+L2 #1 in=100 [task=88] out=134 9.8s cached  FAIL rule:sum-like
+L2 #2 in=294 [task=64 code=133 feed=84] out=424 33.4s  FAIL rule:sum-like
+L2 #3 in=556 [task=64 code=142 feed=336] out=439 34.7s  FAIL rule:sum-like
+   STUCK: 'rule:sum-like' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 3 attempt(s), 950 in / 997 out tokens
+
+=== run 2/5  level 3: row_max  [naive, ve22ccab872] ===
+L3 #1 in=100 [task=88] out=181 13.1s cached  FAIL rule:max-like
+L3 #2 in=603 [task=64 code=180 feed=345] out=585 45.8s  FAIL rule:max-like
+L3 #3 in=575 [task=64 code=152 feed=345] out=422 33.2s  FAIL rule:max-like
+   STUCK: 'rule:max-like' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 3 attempt(s), 1278 in / 1188 out tokens
+
+=== run 2/5  level 4: rmsnorm  [naive, ve22ccab872] ===
+L4 #1 in=147 [task=135] out=222 16.0s cached  FAIL rule:sum-like
+L4 #2 in=743 [task=111 code=221 feed=397] out=511 40.3s  FAIL rule:sum-like
+L4 #3 in=780 [task=111 code=266 feed=389] out=527 41.0s  FAIL rule:sum-like
+   STUCK: 'rule:sum-like' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 3 attempt(s), 1670 in / 1260 out tokens
+
+=== run 3/5  level 1: relu_affine  [naive, ve22ccab872] ===
+L1 #1 in=97 [task=85] out=211 15.2s cached  PASS dev; holdout 30/30
+   => verified (confidence 0.95) after 1 attempt(s), 97 in / 211 out tokens
+
+=== run 3/5  level 2: row_sum  [naive, ve22ccab872] ===
+L2 #1 in=98 [task=86] out=164 11.9s cached  FAIL rule:sum-like
+L2 #2 in=325 [task=64 code=163 feed=85] out=410 32.3s  FAIL rule:sum-like
+L2 #3 in=314 [task=64 code=155 feed=82] out=688 54.1s  FAIL rule:sum-like
+   STUCK: 'rule:sum-like' 3 attempts in a row; more of the same won't help
+   => stuck (confidence 0.00) after 3 attempt(s), 737 in / 1262 out tokens
+
+=== run 3/5  level 3: row_max  [naive, ve22ccab872] ===
+L3 #1 in=98 [task=86] out=208 15.0s cached  FAIL numeric:tile-overwrite

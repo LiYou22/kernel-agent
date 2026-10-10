@@ -14,7 +14,7 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 14:35 EDT)
+## Status and open items (updated 14:55 EDT)
 
 **Running on seat-130** (code version `e22ccab872`; every result logs its version):
 `ours` L1–4 done (L1 5/5, L2 4/5, L3 5/5, L4 1/5); `naive` L1–4 and `ours` L5–7 running since
@@ -36,17 +36,15 @@ Check that the first log line shows `ve22ccab872`; anything else is not comparab
 |---|---|---|---|
 | 1 | the agent | done (`kagent/`) | 130 |
 | 2 | verification harness + tolerance reasoning | done (proven float32 bounds; `kagent/harness.py`, notes) | 130 |
-| 3 | eval set, incl. hostile values | in code only; **readable listing missing** | 130 (A1) |
-| 4 | failure taxonomy with counts | data exists; **cross-run table missing** | 130 (A3), 132 to review |
-| 5 | token instrumentation | scripted plot only; **real-run plot missing** | 130 (A2) |
-| 6 | one-page reproduction note | **missing** | 130 (A4), 134 to review |
+| 3 | eval set, incl. hostile values | done: `EVALSET.md` (207 dev + 156 holdout cases) | 130 |
+| 4 | failure taxonomy with counts | done: `TAXONOMY.md` (re-run `scripts/taxonomy.py` as results arrive) | 130, 132 to review |
+| 5 | token instrumentation | done: real-run plot `notes/fig-tokens-run4.png` (max 706 tokens / attempt) | 130 |
+| 6 | one-page reproduction note | done: `README.md` (local commands verified) | 130, 134 to review |
 | – | demo script (failure + recovery, naive vs ours, efficiency) | not started | 134, with 130 |
 
 **Open work, in order**
 
-- **A. Deliverables (130, now, no model needed)**: A1 eval-set listing (generated LaTeX table);
-  A2 token plot from the real `ours` L1–4 run; A3 failure-taxonomy table over all runs;
-  A4 README as the one-page reproduction note.
+- **A. Deliverables: done** (eval set, real token plot, taxonomy, reproduction note).
 - **B. v3 agent (130, after A)**: structural directives ask for a loop rewrite (notes E17); one
   remedy per directive (E13); crash-specific directives (E21); 12 attempts instead of 8; holdout
   timeout that separates slow from wrong. Tested locally only; deployed as a separate `ours-v3`

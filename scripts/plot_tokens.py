@@ -1,7 +1,7 @@
 """Input tokens per attempt, split by what they were spent on (task / code / feedback / ledger,
 plus chat-template overhead). Writes <log>.tokens.png and prints the same numbers as a table.
 
-    uv run python scripts/plot_tokens.py runs/20261010-160000.jsonl
+    uv run python scripts/plot_tokens.py runs/20261010-160000.jsonl [RUN]   # RUN is 1-based
 """
 import json
 import sys
@@ -27,8 +27,10 @@ def load(path):
     return att
 
 
-def main(path):
+def main(path, run=None):
     att = load(path)
+    if run is not None:
+        att = [r for r in att if r["run"] == run]
     if not att:
         sys.exit("no attempts in log")
     exact = all(r["exact_tokens"] for r in att)
@@ -66,10 +68,10 @@ def main(path):
     ax.spines["bottom"].set_color("#d0cec8")
     ax.legend(ncol=5, fontsize=8, frameon=False, loc="upper left", bbox_to_anchor=(0, -0.32))
     fig.tight_layout()
-    out = Path(path).with_suffix(".tokens.png")
+    out = Path(path).with_suffix(f".tokens{'' if run is None else f'-run{run + 1}'}.png")
     fig.savefig(out, dpi=160, facecolor=SURFACE)
     print(f"\nwrote {out}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], int(sys.argv[2]) - 1 if len(sys.argv) > 2 else None)   # optional 1-based run
