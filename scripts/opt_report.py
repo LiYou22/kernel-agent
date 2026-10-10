@@ -66,30 +66,38 @@ def main():
         print(f"wrote {a.tex}")
 
     labels = [f"L{d['level']} {d['source']}" for d in ks]
-    x = range(len(ks))
-    fig, ax = plt.subplots(figsize=(max(5, 1.1 * len(ks) + 2), 3.8), facecolor=SURFACE)
-    ax.set_facecolor(SURFACE)
+    x = list(range(len(ks)))
     w = 0.36
-    before = [d["start"]["time_x"] for d in ks]
-    after = [d["final"]["time_x"] for d in ks]
-    ax.bar([i - w / 2 for i in x], before, w, color=BEFORE, label="before", edgecolor=SURFACE, linewidth=1.5)
-    ax.bar([i + w / 2 for i in x], after, w, color=AFTER, label="after optimisation", edgecolor=SURFACE, linewidth=1.5)
-    for i, (b, f) in enumerate(zip(before, after)):
-        if f < b:
-            ax.text(i + w / 2, f, f"-{(1 - f / b):.0%}", ha="center", va="bottom", fontsize=8, color=INK)
-    ax.axhline(1.0, color=MUTED, linewidth=1, linestyle=(0, (4, 3)))
-    ax.text(-0.45, 1.0, "roofline minimum", ha="left", va="bottom", fontsize=8, color=MUTED)
-    ax.set_xticks(list(x), labels, rotation=30, ha="right", fontsize=8, color=MUTED)
-    ax.set_ylabel("roofline time / minimum", color=MUTED, fontsize=9)
-    ax.set_ylim(0, max(before + after) * 1.18)
-    ax.set_title("Verified kernels before and after the efficiency stage", loc="left", fontsize=11, color=INK)
-    ax.grid(axis="y", color=GRID, linewidth=0.8)
-    ax.set_axisbelow(True)
-    for side in ("top", "right", "left"):
-        ax.spines[side].set_visible(False)
-    ax.spines["bottom"].set_color("#d0cec8")
-    ax.tick_params(axis="y", labelsize=8, colors=MUTED)
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    # two panels, one measure each: roofline time (linear) and instructions (log); never a dual axis
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(max(6, 0.95 * len(ks) + 2), 6.4), sharex=True,
+                                   facecolor=SURFACE)
+    for ax, key, title, log in ((ax1, "time_x", "Roofline time / minimum (1.00 = at the roofline)", False),
+                                (ax2, "ops", "Instructions issued (log scale)", True)):
+        ax.set_facecolor(SURFACE)
+        before = [d["start"][key] for d in ks]
+        after = [d["final"][key] for d in ks]
+        ax.bar([i - w / 2 for i in x], before, w, color=BEFORE, label="before", edgecolor=SURFACE, linewidth=1.5)
+        ax.bar([i + w / 2 for i in x], after, w, color=AFTER, label="after optimisation", edgecolor=SURFACE, linewidth=1.5)
+        for i, (b, f) in enumerate(zip(before, after)):
+            if f < b * 0.95:
+                lab = f"{b / f:.0f}x fewer" if log else f"-{(1 - f / b):.0%}"
+                ax.text(i + w / 2, f, lab, ha="center", va="bottom", fontsize=7.5, color=INK)
+        if log:
+            ax.set_yscale("log")
+        else:
+            ax.axhline(1.0, color=MUTED, linewidth=1, linestyle=(0, (4, 3)))
+            ax.set_ylim(0, max(before + after) * 1.2)
+        ax.set_title(title, loc="left", fontsize=10, color=INK)
+        ax.grid(axis="y", color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color("#d0cec8")
+        ax.tick_params(axis="y", labelsize=8, colors=MUTED)
+    ax1.legend(frameon=False, fontsize=8, loc="upper left")
+    ax2.set_xticks(x, labels, rotation=30, ha="right", fontsize=8, color=MUTED)
+    fig.suptitle("Verified kernels before and after the efficiency stage", x=0.01, ha="left",
+                 fontsize=11, color=INK)
     fig.tight_layout()
     out = Path(a.log).with_suffix(".png")
     fig.savefig(out, dpi=160, facecolor=SURFACE)

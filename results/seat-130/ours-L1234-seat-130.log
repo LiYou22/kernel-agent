@@ -206,3 +206,27 @@ L3 #4 in=554 [task=69 code=262 feed=210] out=448 32.1s  PASS dev; holdout 18/18
    => verified (confidence 0.95) after 4 attempt(s), 1431 in / 1191 out tokens
 
 === run 5/5  level 4: rmsnorm  [ours, ve22ccab872] ===
+L4 #1 in=146 [task=134] out=222 16.0s  FAIL rule:sum-like
+      -> Replace `np.mean` with an explicit python loop over the columns of the tile that accumulates into a 1-D array of length (i1 - i0): acc = np.zeros(i1 - i0); f...
+L4 #2 in=471 [task=116 code=221 feed=121] out=275 19.8s  FAIL crash:IndexError
+      -> The kernel raises IndexError: index 512 is out of bounds for axis 1 with size 188 at line 23 `acc[row] += tile_x[row, col]`
+L4 #3 in=530 [task=116 code=274 feed=127] out=446 32.0s  FAIL crash:ValueError
+      -> The kernel raises ValueError: operands could not be broadcast together with shapes (7,13) (7,)  at line 28 `tile_y = tile_x / rms * g[j:end_j]`
+L4 #4 in=544 [task=116 code=284 feed=131] out=679 48.6s  FAIL rule:layout
+      -> Remove `np.newaxis`
+L4 #5 in=580 [task=116 code=350 feed=101] out=294 21.2s  FAIL numeric:nonfinite
+      -> Some outputs are nan or inf although the true answer is finite
+L4 #6 in=628 [task=116 code=293 feed=206] out=628 45.0s  FAIL numeric:per-tile-stat
+      -> Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile alone
+L4 #7 in=633 [task=116 code=305 feed=199] out=504 36.1s  FAIL numeric:tag:huge-magnitude
+      -> Values around 1e18 overflow float32 when squared (float32 max is 3.4e38)
+L4 #8 in=650 [task=116 code=300 feed=221] out=514 36.9s  FAIL numeric:tag:huge-magnitude
+      -> Values around 1e18 overflow float32 when squared (float32 max is 3.4e38)
+   => failed (confidence 0.00) after 8 attempt(s), 4182 in / 3562 out tokens
+
+=== summary over 5 run(s) ===
+  L1 relu_affine  verified 5/5  mean attempts when verified 1.6  statuses ['verified', 'verified', 'verified', 'verified', 'verified']
+  L2 row_sum      verified 4/5  mean attempts when verified 3.8  statuses ['verified', 'verified', 'verified', 'stuck', 'verified']
+  L3 row_max      verified 5/5  mean attempts when verified 5.2  statuses ['verified', 'verified', 'verified', 'verified', 'verified']
+  L4 rmsnorm      verified 1/5  mean attempts when verified 6.0  statuses ['failed', 'failed', 'stuck', 'verified', 'failed']
+log: runs/ours-L1234-seat-130.jsonl  (code version e22ccab872)

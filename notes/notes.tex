@@ -592,6 +592,62 @@ for a loop-structure change; the model obeyed the first (72 of 80 L4 attempts hi
 difficulty; for v3, structural directives will ask to rewrite the loop structure. PR \#1 is merged
 into \code{upstream-nki/}.
 
+\entry{E18: v2, \code{ours}, L1--4: final (5 runs, seat-130, version \code{e22ccab872})}{2026-10-10}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Level & Verified & Attempts (verified) & Attempts (all) & Tokens in & Tokens out \\
+\midrule
+L1 relu & 5/5 & 1.6 & 1.6 & 295 & 328 \\
+L2 row sum & 4/5 & 3.8 & 4.2 & 1337 & 1045 \\
+L3 row max & 5/5 & 5.2 & 5.2 & 2072 & 1917 \\
+L4 RMSNorm & 1/5 & 6.0 & 6.8 & 3471 & 2883 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+(Tokens are per level per run; the largest single prompt was 779 tokens, under 15\% of the budget.)
+Failure classes over all attempts: L1 \code{rule:escape}$\times3$; L2 \code{rule:sum-like}$\times9$,
+\code{crash:IndexError}$\times5$, \code{tile-overwrite}$\times3$; L3 \code{rule:max-like}$\times9$,
+\code{tile-overwrite}$\times7$; L4 \code{crash:ValueError}$\times8$, \code{rule:sum-like}$\times6$,
+\code{rule:layout}$\times5$, \code{tag:huge-magnitude}$\times5$, \code{crash:IndexError}$\times4$,
+\code{per-tile-stat}$\times3$. The first wall at every level is the banned reduction; at L4 it is
+followed by shape crashes and the float32 overflow. No naive arm yet; started on seat-130 at 18:20 UTC
+together with \code{ours} L5--7, because seats 132--134 had not started.
+
+\entry{E19: optimiser v2: 5 of 11 rewrites accepted, up to $79\times$ fewer instructions}{2026-10-10}
+Efficiency of the 15 verified model kernels from E18: \textbf{8 are per-element loops} (1 element per
+instruction, $\sim$135k instructions where column vectors need 2{,}068), and the one verified L4 kernel
+reads $x$ 2.98 times with 405{,}186 instructions (roofline $1.99\times$). With v2 directives (diagnosed
+pattern + rule-safe snippet + ``you may restructure the loops'' + tile-rule floors), 5 of 11 rewrites
+were accepted, against 0 of 13 for v1:
+
+\begin{tabular}{@{}lll@{}}
+\toprule
+Kernel & Roofline time & Instructions \\
+\midrule
+L2 run 1, L2 run 2, L3 run 2 (model) & $1.00\to1.00$ & $\sim$135k $\to$ 2{,}068 ($65\times$ fewer) \\
+L4 run 3 (model) & $1.99\to1.50$ (reads $2.98\to1.99$) & 405{,}186 $\to$ 5{,}158 ($79\times$ fewer) \\
+L5 softmax (hand) & $2.00\to1.50$ (online softmax) & 14{,}434 $\to$ 20{,}620 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+The other 6: five rule violations (L3 rewrites reaching for \code{np.max} despite the snippet) and one
+wrong kernel; all rejected, every kernel stays correct. RMSNorm and matmul hand kernels are already at
+the tile-rule floor and are no longer asked for the impossible.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{fig-opt2.png}
+\caption{Optimiser v2 on seat-130. Top: roofline time; bottom: instructions (log scale).}
+\end{figure}
+
+\entry{E20: the upstream NKI agent on seat-130}{2026-10-10}
+The unchanged upstream NKI agent, 5 runs on seat-130: L1 0/5 (always 0.30), L2 4/5 (one run 0.30),
+L3 0/5 (0.30), L4 0/5 (0.62). The teammate's baseline (\code{upstream-nki/}) had L2 5/5 with zero
+variance; this run shared its server with our benchmark, which may explain the one divergent L2 run
+(not tested).
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices

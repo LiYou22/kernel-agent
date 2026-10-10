@@ -1,0 +1,4 @@
+
+=== run 1/5  level 5: softmax  [ours, ve22ccab872] ===
+L5 #1 in=125 [task=113] out=183 14.2s  FAIL rule:sum-like
+      -> Replace `np.sum` with an explicit python loop over the columns of the tile that accumulates into a 1-D array of length (i1 - i0): acc = np.zeros(i1 - i0); fo...
