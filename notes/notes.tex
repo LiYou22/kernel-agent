@@ -798,6 +798,26 @@ oscillation), and a persistent ``memory'' of past mistakes in the first prompt. 
 into the prompt, the thing the challenge measured to make models audit themselves into silence, and
 both need their own arm; one change at a time keeps the v3 result attributable. Listed as next steps.
 
+\entry{E26: pre-registered decision rule for v3 (written 15:45 EDT, before any v3 result)}{2026-10-10}
+Written before the v3 run finishes, so the conclusion cannot be fitted to the data.
+\begin{itemize}
+  \item \textbf{Primary metric}: verified runs on L4--L6. v2 baseline on seat-130: L4 1/5, L5 0/5,
+        L6 0/5, i.e.\ 1/15. v3 (\code{29fd8d90d5}) runs 3 times on each, 9 level-runs. \textbf{v3 counts as
+        better if it verifies at least 2 of 9.}
+  \item \textbf{Secondary, explanatory only}: per run, the most dev cases passed and whether the run
+        reached a rule-clean kernel. Used to explain the outcome, never to replace the primary metric.
+  \item \textbf{If v3 is not better}: the final agent stays v2 (\code{main}), and the report says which
+        changes were tried, what they did to the trajectories (e.g.\ the per-column directive clears the
+        broadcast hurdle in one step; structural rewrites oscillate, E25), and why they were not adopted.
+  \item \textbf{Either way}, two harness fixes go to \code{main} as v2.1, because they change what the
+        checker accepts, not how the agent repairs: numpy alias tracking in the static check (red team,
+        PR \#2) and the 120\,s holdout timeout (slow vs wrong, E21). Results already reported keep their
+        version label.
+  \item \textbf{One optional follow-up, time-boxed}: only if v3's logs show oscillation as the main
+        blocker, a ``must keep'' list of constraints already fixed, on L4 only, 3 runs; stopped at 18:30
+        EDT whatever its state, and reported either way.
+\end{itemize}
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
