@@ -14,6 +14,54 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
+## Status and open items (updated 14:35 EDT)
+
+**Running on seat-130** (code version `e22ccab872`; every result logs its version):
+`ours` L1–4 done (L1 5/5, L2 4/5, L3 5/5, L4 1/5); `naive` L1–4 and `ours` L5–7 running since
+14:20. No other pod has reported results yet.
+
+**Benchmark slices still unclaimed, reassigned** (seat-130 took `naive` L1–4 and `ours` L5–7):
+
+| seat | slice to run now | command |
+|---|---|---|
+| 132 | `naive` L5–7 | `scripts/launch.sh naive 5 6 7` |
+| 133 | `ours` L8–10 | `scripts/launch.sh ours 8 9 10` |
+| 134 | `naive` L8–10 | `scripts/launch.sh naive 8 9 10` |
+
+Check that the first log line shows `ve22ccab872`; anything else is not comparable.
+
+**Deliverables** (from the challenge):
+
+| # | deliverable | status | owner |
+|---|---|---|---|
+| 1 | the agent | done (`kagent/`) | 130 |
+| 2 | verification harness + tolerance reasoning | done (proven float32 bounds; `kagent/harness.py`, notes) | 130 |
+| 3 | eval set, incl. hostile values | in code only; **readable listing missing** | 130 (A1) |
+| 4 | failure taxonomy with counts | data exists; **cross-run table missing** | 130 (A3), 132 to review |
+| 5 | token instrumentation | scripted plot only; **real-run plot missing** | 130 (A2) |
+| 6 | one-page reproduction note | **missing** | 130 (A4), 134 to review |
+| – | demo script (failure + recovery, naive vs ours, efficiency) | not started | 134, with 130 |
+
+**Open work, in order**
+
+- **A. Deliverables (130, now, no model needed)**: A1 eval-set listing (generated LaTeX table);
+  A2 token plot from the real `ours` L1–4 run; A3 failure-taxonomy table over all runs;
+  A4 README as the one-page reproduction note.
+- **B. v3 agent (130, after A)**: structural directives ask for a loop rewrite (notes E17); one
+  remedy per directive (E13); crash-specific directives (E21); 12 attempts instead of 8; holdout
+  timeout that separates slow from wrong. Tested locally only; deployed as a separate `ours-v3`
+  arm on L4–L6 when a pod is free, so the frozen v2 comparison stays clean.
+- **C. Final analysis and demo (from ~16:00, when the v2 slices finish)**:
+  `scripts/analyze.py ... --recheck` for the final tables and calibration (slow vs wrong);
+  `scripts/opt_report.py` for the efficiency figure; demo script.
+
+**Headline results so far** (details in `notes/notes.tex`, E18–E21):
+- `ours` L1–4: 15 of 20 runs verified; L4 is the wall (1/5).
+- `naive` run 1 is stuck at L1, where `ours` needs 1.6 attempts: the verbatim verdict makes the
+  model repeat the violation (the challenge's prediction).
+- Efficiency stage: 8 of 15 verified model kernels are per-element loops; optimiser v2 accepted
+  5 of 11 rewrites, up to 79x fewer instructions, every kernel still verified (`notes/fig-opt2.png`).
+
 ## Checkpoints
 
 | time (EDT) | checkpoint |
