@@ -818,6 +818,17 @@ Written before the v3 run finishes, so the conclusion cannot be fitted to the da
         EDT whatever its state, and reported either way.
 \end{itemize}
 
+\entry{E27: best-of-$n$ sampling is a no-op on this server (15:52 EDT)}{2026-10-10}
+Question: can we draw several samples per attempt and keep the best (the verifier would pick it)?
+Probe (\code{scripts/sampling\_probe.py}): the L4 first prompt sent 4 times concurrently (one batch)
+and 2 times sequentially, \code{temperature=0.6}, no seed, cache off, on seat-130 while the v3 run was
+also using the server. \textbf{All 6 replies are byte-identical} (same hash, 198 tokens each). So
+\code{--samples N} with one prompt buys $N$ copies at $N\times$ the cost; the upstream README's
+``Qwen3's samples differ'' does not hold on our seat. Diversity must come from the prompt (different
+wordings, or differently phrased directives per sample), which is what our per-run wordings already
+do across runs (E10). A prompt-varied best-of-$n$ is the remaining option; with a fixed $\sim$25 tok/s
+per server it trades depth (12 sequential repairs) for breadth (e.g.\ 4 wordings $\times$ 3 rounds).
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
