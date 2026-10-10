@@ -182,3 +182,10 @@ def test_near_miss_after_rewrite_gets_the_skeleton_line():
     assert 0 < len(rep.violations) < REWRITE_AT
     d = translate(rep)
     assert d.key.startswith("rule:") and "s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]" in d.instruction, d.instruction
+
+
+def test_layernorm_down_the_columns_is_named():
+    # live v3 L8: rule-clean, every output wrong, translator could only say numeric:other (15x)
+    from kagent.translate import translate
+    d = translate(run(8, "broken/l8_live_column_stats.py"))
+    assert d.key == "numeric:wrong-axis" and "normalises each ROW" in d.instruction, d.instruction

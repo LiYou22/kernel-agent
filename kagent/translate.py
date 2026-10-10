@@ -306,6 +306,11 @@ HYPOTHESES = [
      "overwritten for every column tile instead of combined across tiles. Keep one running value "
      "per row across ALL column tiles: initialize it before the column-tile loop, combine each tile "
      "into it inside the loop, and write it to the output only after the loop."),
+    ("normalised down each column", "numeric:wrong-axis",
+     "Each column was normalised with the mean and variance of that column over the rows of a tile. "
+     "Layernorm normalises each ROW: mean_i and var_i are over all N columns of row i. Keep a vector "
+     "of length i1 - i0 (one value per row), accumulate it over every column j of every column tile "
+     "with s += x[i0:i1, j], then write out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv * g[j] + b[j]."),
     ("tile alone, not of the whole row", "numeric:per-tile-stat",
      "Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile "
      "alone. The statistic must cover the WHOLE row: first loop over all column tiles to accumulate "
