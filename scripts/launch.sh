@@ -8,7 +8,7 @@ POD=${POD:?set POD=seat-NNN}
 MODE=$1; shift
 NAME="${MODE}-L$(IFS=; echo "$*")-${POD}"
 kubectl exec "$POD" -c app -- bash -c "cd /workspace/stageA && mkdir -p runs && \
-  (setsid nohup python3 -u -m kagent.agent --mode $MODE --levels $* --repeat 5 \
+  (setsid nohup python3 -u -m kagent.agent --mode $MODE --levels $* --repeat ${REPEAT:-5} \
    --out runs/$NAME.jsonl > runs/$NAME.log 2>&1 < /dev/null &) && sleep 2 && \
   pgrep -af kagent.agent | grep -v pgrep"
 echo "started $NAME on $POD; watch with:"

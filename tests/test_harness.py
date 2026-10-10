@@ -130,3 +130,13 @@ def test_numpy_alias_on_an_unreached_branch_is_caught():
     # red team, PR #2: `xp = np; xp.max` on a branch the tests never take passed with 0 violations
     rep = run(3, "redteam/l3_unreached_alias_max.py")
     assert not rep.passed and any(v.kind == "max-like" for v in rep.violations), rep.text()
+
+
+@pytest.mark.parametrize("path,key", [("l4_live_broadcast_crash.py", "crash:ValueError"),
+                                      ("l4_live_reshape.py", "rule:layout")])
+def test_rownorm_broadcast_gets_the_column_loop(path, key):
+    # v2 L4: 13 of 37 failures cycled between a broadcast crash and a .reshape violation, and the
+    # layout fix showed a transpose loop; both must now point at the per-column form
+    from kagent.translate import translate
+    d = translate(run(4, "broken/" + path))
+    assert d.key == key and "out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]" in d.instruction, d.instruction

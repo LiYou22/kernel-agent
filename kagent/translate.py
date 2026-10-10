@@ -115,7 +115,26 @@ def _first_sentence_of(msg):
     return msg.split(";")[0]
 
 
-def crash_fix(msg):
+# Row-wise normalisations scale a (rows, cols) tile by a per-row vector, which needs broadcasting,
+# which the rules ban. v2 L4: 13 of 37 failures were this (a broadcast crash, then .reshape to fix it,
+# a layout violation, then the crash again), and the generic layout fix showed a *transpose* loop.
+# The only legal form is one column at a time, with the per-row vector and a scalar per column.
+ROWNORM_COLUMN = {
+    "rmsnorm": "out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]",
+    "softmax": "out[i0:i1, j] = np.exp(x[i0:i1, j] - m) / s",
+    "layernorm": "out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv * g[j] + b[j]",
+}
+
+
+def rownorm_fix(level_name):
+    line = ROWNORM_COLUMN[level_name]
+    return (f"Do not reshape, add axes or broadcast: a (rows, cols) tile cannot be combined with a "
+            f"per-row vector. Write the output one column at a time, so every operand is a vector of "
+            f"length i1 - i0 or a scalar: for j in range(j0, j1): `{line}` (the per-row values are "
+            f"vectors of length i1 - i0, computed over the whole row first).")
+
+
+def crash_fix(msg, level_name=None):
     """The fix for the crashes the model actually produces (live L2, L4, L5, L6, L10); None if the
     message is not one we know."""
     m = re.search(r"index (-?\d+) is out of bounds for axis (\d+) with size (\d+)", msg)
@@ -125,6 +144,8 @@ def crash_fix(msg):
                 f"is smaller than 128 rows / 512 columns. Inside a tile index the tile slice with "
                 f"local positions 0 .. end - start - 1, or index the full array with global positions "
                 f"start .. end - 1; never mix the two, and never assume a full-size tile.")
+    if level_name in ROWNORM_COLUMN and "broadcast" in msg:
+        return rownorm_fix(level_name)
     m = re.search(r"could not broadcast input array from shape \(([^)]*)\) into shape \(([^)]*)\)", msg)
     if m:
         return (f"An assignment puts a value of shape ({m.group(1)}) into a slot of shape "
@@ -167,7 +188,7 @@ def translate(rep):
         exc = r.msg.split(":")[0]
         names = ", ".join(f"'{c.case.name}'" for c in crashes[:3])
         where = f"It crashes on {len(crashes)} of {len(rep.results)} cases, e.g. {names}"
-        fix = crash_fix(r.msg)
+        fix = crash_fix(r.msg, rep.level.name)
         if fix:
             return Directive(f"crash:{exc}", fix, f"The kernel raises {r.msg}. {where}.")
         return Directive(f"crash:{exc}",
@@ -189,7 +210,10 @@ def translate(rep):
         where = ", ".join(f"line {v.line} `{v.source_line}`" for v in vs if v.line)
         rest = len(rep.violations) - len(vs)
         later = f" ({rest} other rule problem(s) will be handled after this one.)" if rest else ""
-        return Directive(f"rule:{kind}", vs[0].fix() + later, f"Rule broken at {where}." if where else "")
+        fix = (rownorm_fix(rep.level.name)
+               if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN
+               else vs[0].fix())
+        return Directive(f"rule:{kind}", fix + later, f"Rule broken at {where}." if where else "")
 
     return _numeric(rep)
 
