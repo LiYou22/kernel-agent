@@ -99,9 +99,10 @@ From the challenge: "if the harness can't catch your own deliberate bug, it will
 - Demo storyline: one failure and its recovery. Ready-made examples: L2 indexes the partial tile
   out of bounds, then recovers; L3 / E9 (the translator could not name the cause, then a new
   diagnostic could).
-- Stage B comparison from `baselines/upstream-nki/` (upstream NKI agent, 5 runs: L2 5/5, L1/L3
-  always 0.30 = every shape crashed, L4 always 0.62): a section on "on NKI the failures are API
-  misuse, not wrong numerics".
+- Stage B comparison from `upstream-nki/` (upstream NKI agent, 5 runs: L2 5/5, L1/L3 always
+  0.30 = every shape crashed, L4 always 0.62; feedback sidecar v2 solved NKI L4, see
+  `upstream-nki/FEEDBACK-EXPERIMENTS.md`): a section on "on NKI the failures are API misuse, not
+  wrong numerics", and what fixed L4.
 - Check every deliverable: agent, harness (with tolerance rationale), eval set, failure taxonomy,
   token instrumentation, reproduction note.
 - Draft 20:00, final 20:45.
@@ -109,4 +110,5 @@ From the challenge: "if the harness can't catch your own deliberate bug, it will
 ## References
 - Design and experiment log: `notes/notes.tex` (English). Plain-language Chinese and Korean
   versions live outside the repo, maintained by 130.
-- Upstream NKI baseline: `baselines/upstream-nki/` (read-only; do not run its scripts locally).
+- Upstream NKI baseline and feedback sidecars: `upstream-nki/` (maintained by its author; the
+  sidecars run on a seat pod against the upstream agent, not locally).
