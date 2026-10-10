@@ -72,12 +72,31 @@ class ScriptedModel:
 
 # ---------------------------------------------------------------- prompts
 
-def first_prompt(level, terse):
+# Same meaning, different wording. The server is near-deterministic (E10), so identical prompts
+# make repeated runs identical; run k uses wording k % 5, which turns "5 runs" into a rate over
+# phrasings instead of five copies of one run.
+FIRST_WORDINGS = [
+    "Write a Python function `{sig}` using numpy. {task} Process the array in tiles of at most "
+    "128 rows x 512 columns with explicit python loops over the tiles; the last tile in each "
+    "direction may be smaller. Reply with one ```python code block and nothing else.",
+    "Implement `{sig}` in Python with numpy. {task} Work tile by tile, each tile at most 128 rows "
+    "by 512 columns, using explicit python loops; edge tiles can be smaller. Answer with a single "
+    "```python code block.",
+    "{task} Write this as a numpy function `{sig}` that walks over the input in tiles of up to "
+    "128 x 512 elements with plain python loops (the last tiles may be partial). Only output one "
+    "```python block.",
+    "Task: {task}\nSignature: `{sig}` (numpy). Use explicit python loops over tiles of at most "
+    "128 rows and 512 columns; the final tile along each axis may be smaller. Output exactly one "
+    "```python code block.",
+    "Using numpy, write `{sig}`. {task} The computation must go tile by tile (tiles up to 128 "
+    "rows x 512 columns, smaller at the edges) with explicit python loops. Return only a "
+    "```python code block.",
+]
+
+
+def first_prompt(level, terse, wording=0):
     if terse == 0:
-        text = (f"Write a Python function `{level.signature}` using numpy. {level.task} Process "
-                f"the array in tiles of at most 128 rows x 512 columns with explicit python loops "
-                f"over the tiles; the last tile in each direction may be smaller. Reply with one "
-                f"```python code block and nothing else.")
+        text = FIRST_WORDINGS[wording % len(FIRST_WORDINGS)].format(sig=level.signature, task=level.task)
     else:
         text = (f"Write a Python function `{level.signature}` using numpy. {level.task} "
                 f"Reply with only a ```python code block.")
@@ -153,6 +172,8 @@ class Result:
     holdout: str = ""
     code: str | None = None
     keys: list = field(default_factory=list)
+    mode: str = "ours"
+    wording: int = 0
 
 
 def _rank(rep):
@@ -165,7 +186,7 @@ def _code_hash(code):
 
 
 def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, say=print,
-          mode="ours"):
+          mode="ours", wording=0):
     """mode="naive" is the ablation: verdict fed back verbatim, no ledger, no reply gate (a
     no-code reply resends the same prompt). Stopping rule, holdout and scoring are identical."""
     naive = mode == "naive"
@@ -177,7 +198,7 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
 
     for att in range(1, max_attempts + 1):
         if code is None:
-            parts, kind = first_prompt(level, terse), ("first" if att == 1 else "reask")
+            parts, kind = first_prompt(level, terse, wording), ("first" if att == 1 else "reask")
         elif naive:
             parts, kind = naive_repair_prompt(level, code, report_text), "repair"
         else:
@@ -223,7 +244,7 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
             _log(log, Attempt(**base, outcome="pass", summary=rep.summary(), code=src))
             say(_line(level, att, sections, r, f"PASS dev; holdout {hold.n_pass}/{len(hold.results)}"))
             res = Result(level.num, run, status, conf, att, tin, tout, None,
-                         hold.summary(), src, keys)
+                         hold.summary(), src, keys, mode, wording)
             _log(log, res)
             return res
 
@@ -245,13 +266,15 @@ def solve(level, model, run=0, max_attempts=8, samples=1, patience=3, log=None, 
         if not naive:
             say(f"      -> {directive.short(160)}")
         if streak >= patience:
-            res = Result(level.num, run, "stuck", 0.0, att, tin, tout, directive.key, "", code, keys)
+            res = Result(level.num, run, "stuck", 0.0, att, tin, tout, directive.key, "", code, keys,
+                         mode, wording)
             say(f"   STUCK: '{directive.key}' {streak} attempts in a row; more of the same won't help")
             _log(log, res)
             return res
 
     res = Result(level.num, run, "failed", 0.0, max_attempts, tin, tout,
-                 directive.key if directive else (keys[-1] if keys else None), "", code, keys)
+                 directive.key if directive else (keys[-1] if keys else None), "", code, keys,
+                 mode, wording)
     _log(log, res)
     return res
 
@@ -284,6 +307,8 @@ def main(argv=None):
     ap.add_argument("--think", action="store_true")
     ap.add_argument("--mode", choices=("ours", "naive"), default="ours",
                     help="naive = ablation: checker report verbatim, no ledger, no reply gate")
+    ap.add_argument("--same-wording", action="store_true",
+                    help="use wording 0 for every run (default: run k uses wording k %% 5)")
     ap.add_argument("--scripted", help="JSON {level: [reply, ...]} to replay instead of a model")
     ap.add_argument("--out", default=None, help="JSONL log (default runs/<time>.jsonl)")
     a = ap.parse_args(argv)
@@ -299,7 +324,7 @@ def main(argv=None):
                 print(f"\n=== run {run + 1}/{a.repeat}  level {n}: {lv.name} ===")
                 model = ScriptedModel(script[str(n)]) if script else LiveModel(a.temperature, a.think)
                 results.append(solve(lv, model, run, a.attempts, a.samples, a.patience, log,
-                                     mode=a.mode))
+                                     mode=a.mode, wording=0 if a.same_wording else run))
                 r = results[-1]
                 print(f"   => {r.status} (confidence {r.confidence:.2f}) after {r.attempts} "
                       f"attempt(s), {r.tokens_in} in / {r.tokens_out} out tokens")

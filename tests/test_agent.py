@@ -62,3 +62,11 @@ def test_naive_mode_sends_the_report_verbatim_and_resends_on_no_code():
     assert "A checker reports:" in m.prompts[1] and "np.asarray [escape]" in m.prompts[1]
     assert "Remove `np.asarray`" not in m.prompts[1]  # no translated instruction
     assert m.prompts[2] == m.prompts[1]               # no reply gate: the same prompt again
+
+
+def test_runs_use_different_wordings_with_the_same_task():
+    p0, p1 = (ScriptedModel([block(GOOD)]) for _ in range(2))
+    solve(LEVELS[1], p0, say=lambda *_: None, wording=0)
+    solve(LEVELS[1], p1, say=lambda *_: None, wording=1)
+    assert p0.prompts[0] != p1.prompts[0]
+    assert LEVELS[1].task in p0.prompts[0] and LEVELS[1].task in p1.prompts[0]

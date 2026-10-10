@@ -417,6 +417,70 @@ them. The fact ``each wrong output equals the result over the last column tile o
 after the loop''. The live kernel is in \code{kernels/broken/l3\_overwrite\_per\_tile.py} with a
 test. Lesson: the deliberate-bug suite is a floor, not a ceiling; the model's own bugs extend it.
 
+\entry{E10: runs are not independent samples}{2026-10-10}
+Comparing run 1 and run 2 of the live benchmark attempt by attempt: the generated code is
+byte-identical (same hash, same completion tokens) for L1 \#1--2 and L2 \#1--2, and the first
+divergence is at L2 \#3 (266 vs 269 tokens). So despite \code{temperature=0.6} this server is
+close to deterministic; the divergence that does appear is more likely batching noise from the
+shared server than sampling. Consequences: (a) ``5 runs'' carry much less than 5 runs of
+information, and a rate like 5/5 must be reported with that caveat; (b) the challenge's warning
+holds here too: a retry with the same prompt is a no-op; (c) to measure robustness we should vary
+something controlled per run, e.g.\ a paraphrase of the task sentence, and report the rate over
+paraphrases. Run 1 of L3 ended \code{stuck} after three \code{numeric:other} (the E9 bug, before
+the fix reached the pod).
+
+%==============================================================================
+\section{Levels 4--7}
+\label{sec:l47}
+
+Same recipe as L1--3: reference in float64, proven float32 bound, hostile cases, hand kernels that
+must pass dev \emph{and} holdout, deliberate bugs that the translator must name.
+
+\noindent\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{3.8cm}Y@{}}
+\toprule
+Level & Bound $\gamma_k\cdot s$ & Hostile cases & Level-specific diagnosis \\
+\midrule
+4 RMSNorm & $k=N+4$, $s=|y|$ & $\pm10^{18}$ (squares overflow float32), large mean, constant rows, zeros &
+  was each column tile normalised with its own mean square? \\
+5 softmax & $k=N+4$, $s = y(1+|x-\max|)$, $+2^{-126}$ for underflow & $\pm10^4$, mean $10^4$,
+  $-10^{30}$, constant rows & per-tile softmax \\
+6 transpose & $k=0$: exact & index-coded values ($x_{ij}=iN+j+1$), $512\times128$, $130\times640$ &
+  decode each wrong output to the input position it came from \\
+7 matmul & $k=K+1$, $s=|A||B|$ & $K\in\{1,7,131,521,1031\}$, $\pm10^4$, cancelling $\pm10^6$ &
+  is the product missing the last partial K tile? \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+\textbf{Hand kernels} pass dev and holdout using at most 44\% of the bound. Efficiency is
+informative: RMSNorm reads its input twice (two passes), softmax three times with 1.4$\times$ the
+minimal FLOPs (exp computed twice), matmul re-reads $A$ and $B$ once per output tile ($2\times$);
+a one-pass online softmax would be the obvious optimisation target.
+
+\textbf{Deliberate bugs and the directive they get:}
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Bug & Directive \\
+\midrule
+RMSNorm squares accumulated in float32 & \code{numeric:tag:huge-magnitude} (float64 or prescale) \\
+RMSNorm / softmax statistic per column tile & \code{numeric:per-tile-stat} \\
+softmax without max subtraction & \code{numeric:nonfinite} (subtract the row max) \\
+transpose skips the partial tile & \code{numeric:partial-row} (output rows = input columns, 512 wide) \\
+transpose writes local, not global, row index & \code{numeric:tag:multi-row-tile} \\
+matmul drops the K tail & \code{numeric:tag:partial-k-tile} \\
+matmul with \code{@} on whole-K slices & \code{rule:whole-array}, then \code{rule:matmul-op} \\
+\bottomrule
+\end{tabular}
+
+\medskip
+Two translator changes came out of this. (1) A \emph{tag fix} table: when the failures are exactly
+the cases with one tag (\code{huge-magnitude}, \code{partial-k-tile}, \code{multi-row-tile}, \dots)
+the directive names the known fix; it now applies even when one tagged case passes by accident
+(the $300\times1$ RMSNorm case cannot overflow with $N=1$). (2) Partial-tile directives use the
+level's own output tile sizes, so a transpose is told about 512-wide output rows, not 128.
+Per-level diagnosis moved into an \code{explain} hook on each level. Self-tests: 41.
+
 %==============================================================================
 \section{Plan}
 \label{sec:plan}
@@ -430,9 +494,9 @@ test. Lesson: the deliberate-bug suite is a floor, not a ceiling; the model's ow
 3 & done & Model client, repair loop, translator, ledger, reply gate, holdout confidence \\
 4 & done & Token accounting and plot; naive ablation arm; results analysis script \\
 5 & running & Live benchmark L1--3: ours $\times5$, then naive $\times5$ (queued) \\
-6 & next & L4--L7 harness: RMSNorm, softmax, transpose, matmul (references, bounds, hostile
-  cases, hand and broken kernels, translator coverage) \\
-7 & later & ``ours v2'' with E9 and later fixes; L4--7 benchmarks for both arms \\
+6 & done & L4--L7 harness (\S\ref{sec:l47}) \\
+7 & next & ``ours v2'' (E9 and L4--7 translator) on L1--7, both arms; per-run task paraphrases
+  so repeats are not identical (E10) \\
 8 & later & L8--10 (layernorm cancellation, banded attention, strided/dilated conv) \\
 9 & later & Failure taxonomy across all runs; one-page reproduction note; demo \\
 \bottomrule
