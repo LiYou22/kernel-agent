@@ -482,6 +482,50 @@ level's own output tile sizes, so a transpose is told about 512-wide output rows
 Per-level diagnosis moved into an \code{explain} hook on each level. Self-tests: 41.
 
 %==============================================================================
+\section{Levels 8--10}
+\label{sec:l810}
+
+\noindent\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{3.4cm}Y@{}}
+\toprule
+Level & Bound $\gamma_k\cdot s$ & Hostile cases & Level-specific diagnosis \\
+\midrule
+8 layernorm & $k=N+6$, $s=|g|\,(|\hat y| + \overline{|x|}/\sigma) + |b|$: the two-pass error grows with
+  mean$/\sigma$, the conditioning of the problem & mean $10^4$, constant rows, zeros, $\pm10^4$ &
+  are the wrong rows exactly those with mean$/\sigma \ge 30$ (cancellation)? per-tile statistic? \\
+9 band attention & $k=d+\min(2w+1,S)+8$, $s=(p|v|)(1+\max|q||k|/\sqrt d)$, $+2^{-126}$ &
+  $w=0$, $w\ge S$, $S\in\{1,7,130,257,520,600\}$, $q\times300$ (scores $\sim10^3$, overflow even in
+  float64) & does the output equal window $w\pm1$ (band edge)? a one-sided (causal) window? \\
+10 conv1d & $k=C_{in}K+1$, $s=|w|\star|x|$ & receptive field $=L$ ($L_{out}=1$), stride 7 with
+  dilation 5, $L_{out}>512$, $C_{in}=130$, cancelling $\pm10^6$ & does the output equal dilation 1? \\
+\bottomrule
+\end{tabularx}
+
+\medskip
+The layernorm bound is the honest one for float32 \emph{two-pass}: a legal float32 two-pass kernel
+passes using 25\% of it, while $E[x^2]-E[x]^2$ fails (by NaN or by $O(1)$ errors) on exactly the
+large-mean and constant rows. A first attempt keyed the directive on the \code{large-mean} tag, but
+the failures span two tags; the per-row condition ratio names the cause directly
+(\code{numeric:cancellation}). The first attention hostile case ($q\times30$) let a kernel without max
+subtraction pass, because it computed in float64; it was raised to $q\times300$. Self-tests: 58.
+
+\entry{E11: one harness version across pods}{2026-10-10}
+Every result now logs \code{version}, a hash of \code{kagent/*.py}; \code{analyze.py} flags an arm
+that mixes versions. The first hash differed between laptop and pod for identical sources: macOS
+\code{tar} had left \code{.\_*.py} AppleDouble files in the pod (from the first sync, before
+\code{COPYFILE\_DISABLE}), and the hash read them. Dotfiles are now skipped. seat-130 was restarted
+on the final version \code{93845c17a6}; identical requests are served from the reply cache, so the
+restart costs almost nothing (cached replies are real earlier replies to byte-identical requests,
+marked \code{cached} in the log).
+
+%==============================================================================
+\section{Team}
+Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
+in parallel: \code{ours} L1--4 (130), \code{naive} L1--4 (132), \code{ours} L5--7 (133),
+\code{naive} L5--7 (134). Roles: core dev (130), experiments and analysis (132), red team (133),
+write-up and demo (134). \code{TEAM.md} has the per-seat commands; \code{main} is protected, so
+teammates merge through pull requests.
+
+%==============================================================================
 \section{Plan}
 \label{sec:plan}
 
@@ -495,9 +539,8 @@ Per-level diagnosis moved into an \code{explain} hook on each level. Self-tests:
 4 & done & Token accounting and plot; naive ablation arm; results analysis script \\
 5 & running & Live benchmark L1--3: ours $\times5$, then naive $\times5$ (queued) \\
 6 & done & L4--L7 harness (\S\ref{sec:l47}) \\
-7 & next & ``ours v2'' (E9 and L4--7 translator) on L1--7, both arms; per-run task paraphrases
-  so repeats are not identical (E10) \\
-8 & later & L8--10 (layernorm cancellation, banded attention, strided/dilated conv) \\
+7 & running & v2 on L1--7, both arms, four pods; per-run task wordings (E10) \\
+8 & done & L8--10 harness (\S\ref{sec:l810}); benchmarks after L1--7 \\
 9 & later & Failure taxonomy across all runs; one-page reproduction note; demo \\
 \bottomrule
 \end{tabularx}
