@@ -14,21 +14,33 @@ in parallel, one per seat. Only seat-130 edits the agent/harness code.
 gate). `naive` = ablation (the checker's report sent back verbatim). Everything else is identical:
 stopping rule, holdout check, scoring. Each repeat uses a different wording of the task (notes E10).
 
-## Status and open items (updated 15:00 EDT)
+## Status and open items (updated 15:25 EDT)
 
-**Running on seat-130** (code version `e22ccab872`; every result logs its version):
-`ours` L1–4 done (L1 5/5, L2 4/5, L3 5/5, L4 1/5); `naive` L1–4 and `ours` L5–7 running since
-14:20. No other pod has reported results yet.
+**Done (v2, `e22ccab872`)**: `ours` L1–4 15/20 vs `naive` L1–4 4/20 (seat-130); `ours` L5–7 0/5 on
+both seat-130 and seat-133 (all three dev-only L7 kernels re-check as slow-but-correct).
+**Running**: v3 (`eddb241adf`) `ours` L4–L6 on seat-130 since 15:07 (5 runs, 12 attempts).
 
 **Benchmark slices still unclaimed, reassigned** (seat-130 took `naive` L1–4 and `ours` L5–7):
 
 | seat | slice to run now | command |
 |---|---|---|
-| 132 | `naive` L5–7 | `scripts/launch.sh naive 5 6 7` |
-| 133 | `ours` L8–10 | `scripts/launch.sh ours 8 9 10` |
-| 134 | `naive` L8–10 | `scripts/launch.sh naive 8 9 10` |
+| **133** | **`ours` v3 on L8–10** (5 runs, 12 attempts) | see below |
+| 132 | (optional) `naive` L5–7 on v2: low value, ours is 0/5 there | `scripts/launch.sh naive 5 6 7` on `main` |
 
-Check that the first log line shows `ve22ccab872`; anything else is not comparable.
+**seat-133, v3 on L8–10** (from a clean checkout of this repo):
+
+```bash
+git fetch origin && git switch v3 && git pull
+export POD=seat-133
+scripts/sync.sh
+kubectl exec $POD -c app -- bash -c 'cd /workspace/stageA && python3 -m pytest -q tests 2>&1 | tail -1'   # 62 passed
+scripts/launch.sh ours 8 9 10
+kubectl exec $POD -c app -- bash -c 'head -2 /workspace/stageA/runs/ours-L8910-seat-133.log'      # must show veddb241adf
+git switch main
+```
+
+When it finishes (about 1.5–2 h): `git switch -c results-seat133-L8910 origin/main`, `scripts/fetch.sh`,
+commit `results/seat-133/ours-L8910-seat-133.*`, open a PR. Seat-130 is running v3 on L4–L6 (5 runs).
 
 **Deliverables** (from the challenge):
 
