@@ -103,3 +103,15 @@ def test_missing_organizers_checker_is_not_verified(monkeypatch):
     monkeypatch.setattr(judge, "available", lambda: False)
     res, _ = run([GOOD])
     assert res.status == "verified-unjudged" and res.confidence < 0.95
+
+
+def _escapes(n):
+    lines = ["    x = np.asarray(x)\n", "    a = np.asarray(a)\n", "    b = np.asarray(b)\n"][:n]
+    return GOOD.replace("    M, N = x.shape\n", "".join(lines) + "    M, N = x.shape\n")
+
+
+def test_same_class_with_falling_violation_count_is_not_stuck():
+    # live v3 L9 went 13 -> 12 -> 10 -> 6 -> 5 violations; a falling count is progress, not a loop
+    res, _ = run([_escapes(3), _escapes(2), _escapes(1), GOOD], patience=3)
+    assert res.keys == ["rule:escape"] * 3
+    assert res.status == "verified" and res.attempts == 4

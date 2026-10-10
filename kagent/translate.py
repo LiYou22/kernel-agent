@@ -190,6 +190,68 @@ def judge_directive(level, message):
                      "float64, and convert only the final result.", first)
 
 
+# A first draft written as whole-array numpy breaks many rules at once (live L8: 5-15 violations per
+# attempt, L9: 5-13). One directive per kind with "N other problems will be handled later" cannot
+# converge in the attempt budget, and each local fix tends to break something else (E13). Past this
+# many violations the kernel is not a near miss, so ask for a rewrite in the one legal loop shape
+# for the op: the structure of the loops and the per-column lines, never the reference's formula.
+REWRITE_AT = 5
+
+SKELETON = {
+    "layernorm": (
+        "for each row tile i0..i1 (128 rows): "
+        "pass 1, s = np.zeros(i1 - i0, dtype=np.float64), then for every column tile j0..j1 and "
+        "every j in it: s += x[i0:i1, j]; mu = s / N. "
+        "Pass 2, the same loops: d = x[i0:i1, j] - mu; ss += d * d; rinv = 1.0 / np.sqrt(ss / N + eps). "
+        "Pass 3, the same loops: out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv. "
+        "Every statistic covers the whole row (all column tiles) before it is used; every operand is a "
+        "column vector of length i1 - i0 or a scalar."),
+    "band_attention": (
+        "for each query row i: lo, hi = max(0, i - w), min(S - 1, i + w); n = hi - lo + 1. "
+        "Scores: s = np.zeros(n, dtype=np.float64); for each chunk c0..c1 of at most 128 keys and "
+        "each feature c in range(d): s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]. "
+        "Row max with a scalar loop: m = -np.inf; for t in range(n): m = max(m, s[t]). "
+        "p[c0:c1] = np.exp((s[c0:c1] - m) / np.sqrt(d)) per chunk. "
+        "Output: total = 0.0; acc = np.zeros(d, dtype=np.float64); for t in range(n): total += p[t]; "
+        "acc += p[t] * v[lo + t, :]; then out[i, :] = acc / total. "
+        "No np.dot, @, einsum, masks or full S x S score matrix: only keys inside the band are touched."),
+}
+
+
+def rewrite_directive(rep):
+    """A whole-kernel rewrite in the op's legal loop shape, or None (op without a skeleton, or a
+    near miss with few violations)."""
+    if len(rep.violations) < REWRITE_AT or rep.level.name not in SKELETON:
+        return None
+    kinds = sorted({v.kind for v in rep.violations})
+    return Directive(
+        "rule:rewrite",
+        f"This draft computes the whole operation with array operations the rules ban "
+        f"({len(rep.violations)} violations: {', '.join(kinds)}), so patching it one line at a time "
+        f"will not finish. Rewrite the function body from scratch in this loop shape, keeping the "
+        f"signature: {SKELETON[rep.level.name]}",
+        f"{len(rep.violations)} rule violations of {len(kinds)} kinds.")
+
+
+# After a rewrite the draft is close (live L9 run 1 attempt 4: 9/9 cases right, 2 violations), but the
+# generic fixes talk about x[i0:i1, j0:j1] tiles, which a band-attention kernel does not have; the
+# model kept `np.dot(q_slice, k_window[t])` on a (257, d) window. For an op with a skeleton, a
+# structural rule fix names the skeleton line that replaces the banned one.
+SKELETON_LINE = {
+    "band_attention": (
+        "In band attention the only legal way to form the scores is one feature column at a time "
+        "over a chunk of at most 128 keys: for c0 in range(0, n, 128): c1 = min(c0 + 128, n); for c "
+        "in range(d): s[c0:c1] += q[i, c] * k[lo + c0:lo + c1, c]. No np.dot, no slice of k with "
+        "more than 128 rows, no per-key dot product."),
+}
+SKELETON_KINDS = {"whole-array", "linalg", "broadcast", "sum-like", "layout", "newaxis"}
+
+
+def _crash_line(msg):
+    m = re.search(r" at line (\d+)", msg)
+    return int(m.group(1)) if m else None
+
+
 def translate(rep):
     if rep.load_error:
         kinds = {v.kind for v in rep.violations}
@@ -202,7 +264,16 @@ def translate(rep):
         return Directive("load-crash", f"The module fails when it is loaded: {rep.load_error}. "
                                        f"Fix that line.")
 
-    crashes = [r for r in rep.results if r.status in ("error", "timeout")]
+    rw = rewrite_directive(rep)
+    if rw:
+        return rw
+
+    # A crash raised by a call the rules ban (live L9: `np.dot(scores, v_window.T)` shape errors, 3
+    # attempts in a row on one run) is not worth fixing: the fix is to remove the call, which the
+    # rule directive says. Crashes on legal lines still come first.
+    banned_lines = {v.line for v in rep.violations if v.line}
+    crashes = [r for r in rep.results if r.status in ("error", "timeout")
+               and not (r.status == "error" and _crash_line(r.msg) in banned_lines)]
     if crashes:
         r = crashes[0]
         if r.status == "timeout":
@@ -234,9 +305,12 @@ def translate(rep):
         where = ", ".join(f"line {v.line} `{v.source_line}`" for v in vs if v.line)
         rest = len(rep.violations) - len(vs)
         later = f" ({rest} other rule problem(s) will be handled after this one.)" if rest else ""
-        fix = (rownorm_fix(rep.level.name)
-               if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN
-               else vs[0].fix())
+        if kind in ("layout", "newaxis", "broadcast") and rep.level.name in ROWNORM_COLUMN:
+            fix = rownorm_fix(rep.level.name)
+        elif kind in SKELETON_KINDS and rep.level.name in SKELETON_LINE:
+            fix = vs[0].fix() + " " + SKELETON_LINE[rep.level.name]
+        else:
+            fix = vs[0].fix()
         return Directive(f"rule:{kind}", fix + later, f"Rule broken at {where}." if where else "")
 
     return _numeric(rep)
@@ -256,6 +330,11 @@ HYPOTHESES = [
      "overwritten for every column tile instead of combined across tiles. Keep one running value "
      "per row across ALL column tiles: initialize it before the column-tile loop, combine each tile "
      "into it inside the loop, and write it to the output only after the loop."),
+    ("normalised down each column", "numeric:wrong-axis",
+     "Each column was normalised with the mean and variance of that column over the rows of a tile. "
+     "Layernorm normalises each ROW: mean_i and var_i are over all N columns of row i. Keep a vector "
+     "of length i1 - i0 (one value per row), accumulate it over every column j of every column tile "
+     "with s += x[i0:i1, j], then write out[i0:i1, j] = (x[i0:i1, j] - mu) * rinv."),
     ("tile alone, not of the whole row", "numeric:per-tile-stat",
      "Each column tile is normalised with a statistic (max, sum or mean of squares) of that tile "
      "alone. The statistic must cover the WHOLE row: first loop over all column tiles to accumulate "

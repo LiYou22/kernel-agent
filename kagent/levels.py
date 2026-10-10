@@ -426,7 +426,24 @@ def layernorm_facts(args, g, bad):
     rows = bad.any(axis=1)
     if rows.any() and np.all(ratio[rows] >= 30):
         return ["only rows whose mean is large compared to their spread are wrong (cancellation)"]
+    if _normalised_down_columns(args, g, bad):
+        return ["the output was normalised down each column (statistics over the rows of a tile), not "
+                "along each row"]
     return []
+
+
+def _normalised_down_columns(args, g, bad):
+    """Live v3 L8 (15 attempts 'numeric:other'): mean and variance of each column over the rows of a
+    128-row tile instead of each row over all columns. Recompute that and compare."""
+    x, eps = args[0], LN_EPS
+    x = x.astype(np.float64)
+    alt = np.empty_like(x)
+    for i0 in range(0, x.shape[0], 128):
+        t = x[i0:i0 + 128]
+        mu = t.mean(axis=0)
+        var = ((t - mu) ** 2).mean(axis=0)
+        alt[i0:i0 + 128] = (t - mu) / np.sqrt(var + eps)
+    return bool(bad.any()) and np.allclose(np.asarray(g, np.float64)[bad], alt[bad], rtol=1e-3, atol=1e-4)
 
 
 L8 = Level(

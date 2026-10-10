@@ -41,7 +41,10 @@ for lv, tag, path, src in cands:
     if not ok:
         continue
     tried[lv][1] += 1
-    m = measure(LEVELS[lv], src)
+    try:
+        m = measure(LEVELS[lv], src)
+    except TypeError:      # our harness cannot run it (e.g. pre-v4 signature): cost unknown
+        continue
     key = (round(m["time_x"], 2), m["ops"])
     if lv not in best or key < best[lv][0]:
         best[lv] = (key, tag, path, src, m, msg)
