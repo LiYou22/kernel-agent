@@ -829,6 +829,27 @@ wordings, or differently phrased directives per sample), which is what our per-r
 do across runs (E10). A prompt-varied best-of-$n$ is the remaining option; with a fixed $\sim$25 tok/s
 per server it trades depth (12 sequential repairs) for breadth (e.g.\ 4 wordings $\times$ 3 rounds).
 
+\entry{E28: v3 run 1 (\code{29fd8d90d5}, L4--L6): 0/3, but L4 got every number right (15:55 EDT)}{2026-10-10}
+Trajectories (key, then dev cases passing):
+\begin{itemize}
+  \item \textbf{L4, stuck after 11}: sum-like (15/24) $\to$ layout (15) $\to$ per-tile (15) $\to$
+        whole-array (21) $\to$ whole-array (21) $\to$ sum-like (21) $\to$ layout (21) $\to$ huge-magnitude
+        (21) $\to$ whole-array (\textbf{24/24}) $\times3$. From attempt 9 the numbers are all correct:
+        the per-column directive cleared the broadcast hurdle in one step and all four numeric hurdles
+        were passed. What remained was one rule: to get the whole-row statistic the kernel operates on a
+        full row \code{x[i, :]} (700 columns, over the 512-column tile), and the \code{whole-array}
+        directive is still the generic tile loop, not the row-norm column form E25 added for
+        layout/newaxis/broadcast. The E25 fix missed this violation kind.
+  \item \textbf{L5 softmax, failed after 12}: oscillates between banned reductions (\code{np.sum},
+        \code{np.max}) and overflow (non-finite).
+  \item \textbf{L6 transpose, stuck after 4}: three assignment shape mismatches (a \code{(0,)} value into a
+        \code{(188,)} slot); the more specific v3 crash directive did not get it out.
+\end{itemize}
+Decision, per E26: v3 is not changed while its 3 runs are in progress. Finding for the report: at L4 the
+remaining obstacle is a \emph{rule}, not the numerical algorithm. If the E26 time-boxed follow-up runs
+after 17:30, it is this one, because it targets the blocker the logs show: give the row-norm column form
+for \code{whole-array} violations too (instead of the ``must keep'' list or prompt-varied sampling).
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
