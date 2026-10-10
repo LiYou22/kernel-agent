@@ -31,8 +31,8 @@ uv run python -m kagent.harness 2 demo/l2_attempt1_np_sum.py --fixes
 
 ```
 L2 row_sum: FAIL, 1 rule violation(s), 28/28 cases correct
-- line 14 `result[i:end_row] += np.sum(tile, axis=1)`: np.sum [sum-like]
-FIX line 14: Replace `np.sum` with an explicit python loop over the columns of the tile ...
+- line 15 `result[i:end_row] += np.sum(tile, axis=1)`: np.sum [sum-like]
+FIX line 15: Replace `np.sum` with an explicit python loop over the columns of the tile ...
 ```
 
 > Numerically perfect, 28 of 28, and it scores zero, because `np.sum` hides the tiling. The agent
@@ -48,7 +48,7 @@ uv run python -m kagent.harness 2 demo/l2_attempt2_index_error.py --fixes
 L2 row_sum: FAIL, 0 rule violation(s), 9/28 cases correct
 Pattern: every failing case is 'multi-col-tile' and no passing case is.
 Crash in 19 case(s) (e.g. 'normal 1x700'): IndexError: index 512 is out of bounds for axis 1
-with size 188 at line 16 `acc += tile[:, col]`
+with size 188 at line 17 `acc += tile[:, col]`
 ```
 
 > The rule is gone, but it indexes the tile with the global column `col`. On the second column
@@ -80,7 +80,7 @@ uv run python -m kagent.harness 1 demo/l1_naive_attempt1.py
 ```
 
 ```
-- line 5 `x = np.asarray(x, dtype=np.float32)`: np.asarray [escape]
+- line 6 `x = np.asarray(x, dtype=np.float32)`: np.asarray [escape]
 ```
 
 > Naive gets exactly this line back. Its next attempt changes `np.asarray` to `np.array`
