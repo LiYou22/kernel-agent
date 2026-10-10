@@ -771,6 +771,33 @@ a regression test; v3 version \code{eddb241adf}). The runtime guard would have c
 \textbf{Stage B (teammate, reported in PR \#4)}: with feedback v5 (naming the wrong \code{.ap()} strides),
 NKI L1 average pool went from 0/5 (0.30) to 5/5; NKI L4 1/5 with v2.
 
+\entry{E25: why L4 is a wall, and the first v3 run}{2026-10-10}
+\textbf{v2 L4 attempt by attempt} (5 runs). To pass, a kernel must clear four hurdles in order:
+(1) \code{np.mean} of the squares (every run's attempt 1); (2) normalise a tile without broadcasting;
+(3) a statistic over the whole row, not one tile; (4) float64 squares for $\pm10^{18}$. Hurdle 2 is the
+biggest: 13 of 37 failures (\code{crash:ValueError}$\times8$, \code{rule:layout}$\times5$). The model divides
+a $(\text{rows},\text{cols})$ tile by a $(\text{rows},)$ vector, crashes on the broadcast, fixes it with
+\code{.reshape(-1, 1)} or \code{np.newaxis}, breaks the layout rule, reverts, crashes again (runs 2
+and 3 never leave this loop). Under the rules a per-row vector can only be applied one column at a
+time, and nothing told the model so: the crash directive restated the error and the generic layout
+fix showed a \emph{transpose} loop. Run 4 cleared all four hurdles in 6 attempts; runs 1 and 5 reached
+hurdle 4 and ran out of attempts (run 1 via the E13 \code{.max()} violation).
+
+\textbf{First v3 run} (\code{eddb241adf}, L4 run 1, 12 attempts): a new failure mode, \emph{oscillation}.
+sum-like $\to$ layout $\to$ per-tile $\to$ huge-magnitude $\times2$ $\to$ whole-array $\to$ \textbf{sum-like}
+$\to$ crash $\to$ layout $\to$ \textbf{per-tile} $\to$ whole-array $\to$ \textbf{sum-like}. Allowing
+structural rewrites (E17) lets each rewrite drop fixes made earlier; the ledger records what failed,
+not what must stay fixed.
+
+\textbf{Response.} (a) v3 \code{29fd8d90d5}: for RMSNorm, softmax and layernorm, broadcast crashes and
+layout/newaxis/broadcast violations get the one legal form, e.g.\
+\code{out[i0:i1, j] = x[i0:i1, j] * rinv * g[j]}, with the two live L4 kernels as regression tests
+(64 tests). v3 restarted on seat-130 at 15:35 with 3 runs (L4--L6), to finish with time for analysis.
+(b) Not done, deliberately: a ``must keep'' list of constraints already fixed (would address
+oscillation), and a persistent ``memory'' of past mistakes in the first prompt. Both put rules back
+into the prompt, the thing the challenge measured to make models audit themselves into silence, and
+both need their own arm; one change at a time keeps the v3 result attributable. Listed as next steps.
+
 %==============================================================================
 \section{Team}
 Four seats (130, 132, 133, 134), each with its own chip and model server, run four benchmark slices
