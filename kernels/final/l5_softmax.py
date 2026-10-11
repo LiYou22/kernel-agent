@@ -1,4 +1,4 @@
-# L5 softmax: ours vc5e98d run1 (results/erfu-c5e98d5a75-partial/ours-L145-seat-134.jsonl); organizers' checker: 32/32 cases
+# L5 softmax: ours vc5e98d run1 (results/final-c5e98d5a75/ours-L145-seat-134.jsonl); organizers' checker: 32/32 cases
 import numpy as np
 
 def kernel(x):

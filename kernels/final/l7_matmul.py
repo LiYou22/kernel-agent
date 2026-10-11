@@ -1,4 +1,4 @@
-# L7 matmul: ours vc5e98d run1 (results/erfu-c5e98d5a75-partial/ours-L236710-seat-246.jsonl); organizers' checker: 10/10 cases
+# L7 matmul: ours vc5e98d run1 (results/final-c5e98d5a75/ours-L236710-seat-246.jsonl); organizers' checker: 10/10 cases
 import numpy as np
 
 def kernel(a, b):

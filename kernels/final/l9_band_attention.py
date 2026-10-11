@@ -1,4 +1,4 @@
-# L9 band_attention: ours vc5e98d run1 (results/erfu-c5e98d5a75-partial/ours-L89-seat-245.jsonl); organizers' checker: 5/5 cases
+# L9 band_attention: ours vc5e98d run1 (results/final-c5e98d5a75/ours-L89-seat-245.jsonl); organizers' checker: 5/5 cases
 import numpy as np
 
 def kernel(q, k, v, w):

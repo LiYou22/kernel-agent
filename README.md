@@ -1,5 +1,10 @@
 # kernel-agent
 
+> **Archived (2026-10-10).** Final agent `c5e98d5a75` (tag `v1.0-final`). Submitted as
+> [yahavb/trainium-agent-labs#20](https://github.com/yahavb/trainium-agent-labs/pull/20). Final agent vs naive on
+> L1–L10 (5 runs each): **33/50 vs 9/50 solved, 8.5k vs 25.2k tokens per solved kernel**; every level has a
+> kernel passing both our checker and the organizers' `kernelbench.py` (`FINAL.md`). Summary: `notes/demo-notes.pdf`.
+
 An agent that writes tiled NumPy kernels (Stage A) for a 10-level op ladder, using a model that sees
 at most 8192 tokens per call (input + output). The rules live in the verifier, not in the prompt: the
 model writes freely, the harness finds what is wrong, and the agent translates that verdict into one

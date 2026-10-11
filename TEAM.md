@@ -1,5 +1,7 @@
 # Team plan (deadline 2026-10-10 21:00 EDT)
 
+> **Hackathon over; this file is kept as the record of how the work was split.** Final results: `README.md`, `FINAL.md`.
+
 Every seat has its own chip and model server, so the benchmark is split into four slices that run
 in parallel, one per seat. Only seat-130 edits the agent/harness code.
 

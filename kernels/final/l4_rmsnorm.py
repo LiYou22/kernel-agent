@@ -1,4 +1,4 @@
-# L4 rmsnorm: ours vc5e98d run5 (results/erfu-c5e98d5a75-partial/ours-L145-seat-134.jsonl); organizers' checker: 32/32 cases
+# L4 rmsnorm: ours vc5e98d run5 (results/final-c5e98d5a75/ours-L145-seat-134.jsonl); organizers' checker: 32/32 cases
 import numpy as np
 
 def kernel(x, eps=1e-6):
